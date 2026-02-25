@@ -616,11 +616,33 @@ impl FramePool {
 
 ---
 
+## ML Model Strategy — 3 Phases
+
+### Phase 1: MVP — Pre-trained NSFW Classifier
+- **Model**: GantMan/nsfw_model (MobileNetV2 1.4, INT8, ~3MB)
+- **Output**: 5 classes (Drawing, Hentai, Neutral, Porn, Sexy) → mapped to safe/adult binary
+- **Backend**: `tract` (pure Rust, no C dependencies)
+- **Goal**: End-to-end pipeline working on device
+
+### Phase 2: Multi-Category — Custom Fine-tuned Model
+- **Model**: EfficientNet-Lite0 or MobileNetV3-Large fine-tuned on NSFW + violence + gore datasets
+- **Output**: Multi-label `[safe, adult, violence, gore, hate]`
+- **Alternatives**: Falconsai/nsfw_image_detection (ViT, ONNX), bumble-tech/private-detector (EfficientNet-B0)
+- **Goal**: Full 5-category classification with improved accuracy
+
+### Phase 3: Advanced — Multi-Model Ensemble
+- **Primary**: EfficientNet-Lite0 content classifier (< 15ms)
+- **Secondary**: Text-in-image OCR detector for hate speech
+- **Optimization**: NNAPI/GPU delegates, ARM NEON SIMD, region-based blur via object detection
+- **Goal**: Production-quality with hardware acceleration
+
+---
+
 ## Future Enhancements
 
-1. **Advanced ML**:
-   - Object detection for region-based blur
-   - OCR for text content filtering
+1. **Advanced ML** (Phase 3+):
+   - Object detection for region-based blur (blur only unsafe regions)
+   - OCR for text content filtering (hate speech in screenshots)
    - Audio content analysis
 
 2. **User Customization**:
@@ -642,12 +664,12 @@ impl FramePool {
 
 ## Open Questions / Decisions Needed
 
-1. **ML Model Source**: Pre-trained public model vs. custom training?
-2. **Inference Framework**: TFLite vs. ONNX vs. pure Rust (tract)?
+1. ~~**ML Model Source**: Pre-trained public model vs. custom training?~~ → **Decided**: Phase 1 uses GantMan/nsfw_model (MIT), Phase 2 fine-tunes EfficientNet-Lite0
+2. ~~**Inference Framework**: TFLite vs. ONNX vs. pure Rust (tract)?~~ → **Decided**: `tract` for Phase 1 (pure Rust, easiest cross-compilation), `ort` as Phase 2 option for ViT models
 3. **Monetization**: Free + Pro features? One-time purchase? FOSS?
 4. **Target Audience**: Parental control? Workplace safety? General privacy?
 5. **Brand + UX**: App name, iconography, color scheme
-6. **Initial Release Scope**: Full feature set or MVP with core functionality?
+6. ~~**Initial Release Scope**: Full feature set or MVP with core functionality?~~ → **Decided**: MVP (Phase 1) with core NSFW detection, then iterate
 
 ---
 

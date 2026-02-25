@@ -12,7 +12,16 @@ object RustMLBridge {
 
     private const val TAG = "RustMLBridge"
     private const val LIBRARY_NAME = "pavlova_core"
-    private const val MODEL_FILE = "nsfw_mobilenet_v2_140_224_int8.tflite"
+    private const val MODEL_FILE = "nsfw_mobilenet_v2_140_224.onnx"
+
+    // GantMan NSFW model class indices
+    private const val CLASS_DRAWING = 0
+    private const val CLASS_HENTAI = 1
+    private const val CLASS_NEUTRAL = 2
+    private const val CLASS_PORN = 3
+    private const val CLASS_SEXY = 4
+
+    private val CLASS_NAMES = arrayOf("drawing", "hentai", "neutral", "porn", "sexy")
 
     @Volatile
     private var isInitialized = false
@@ -57,6 +66,8 @@ object RustMLBridge {
 
     /**
      * Classify a frame
+     * Returns ClassificationResult with 5-class scores from GantMan NSFW model:
+     * [drawing, hentai, neutral, porn, sexy]
      */
     fun classifyFrame(imageData: ByteArray, width: Int, height: Int): ClassificationResult {
         if (!isInitialized) {
@@ -64,16 +75,54 @@ object RustMLBridge {
         }
 
         return try {
-            val result = nativeClassifyFrame(imageData, width, height)
+            // scores = [drawing, hentai, neutral, porn, sexy]
+            val scores = nativeClassifyFrame(imageData, width, height)
+            
+            // Find top class
+            val topIndex = scores.indices.maxByOrNull { scores[it] } ?: CLASS_NEUTRAL
+            val topClass = CLASS_NAMES[topIndex]
+            val topScore = scores[topIndex]
+            
+            // Safe classes: neutral + drawing
+            // Unsafe classes: hentai + porn + sexy
+            val safeScore = scores[CLASS_DRAWING] + scores[CLASS_NEUTRAL]
+            val unsafeScore = scores[CLASS_HENTAI] + scores[CLASS_PORN] + scores[CLASS_SEXY]
+            val isSafe = safeScore > unsafeScore
+            
+            // Determine category for filtering policy
+            val category = when (topIndex) {
+                CLASS_NEUTRAL -> "neutral"
+                CLASS_DRAWING -> "drawing"
+                CLASS_PORN -> "porn"
+                CLASS_HENTAI -> "hentai"
+                CLASS_SEXY -> "sexy"
+                else -> "unknown"
+            }
+            
+            val confidence = if (isSafe) safeScore else unsafeScore
+            
+            Log.d(TAG, "Classification: $category (${String.format("%.3f", topScore)}) " +
+                "scores: d=${String.format("%.3f", scores[0])} h=${String.format("%.3f", scores[1])} " +
+                "n=${String.format("%.3f", scores[2])} p=${String.format("%.3f", scores[3])} " +
+                "s=${String.format("%.3f", scores[4])}")
+            
             ClassificationResult(
-                isSafe = result[0] > 0.5f,
-                confidence = result[0],
-                category = if (result[0] > 0.5f) "safe" else "unsafe"
+                isSafe = isSafe,
+                confidence = confidence,
+                category = category,
+                scores = scores,
+                topClass = topClass
             )
         } catch (e: Exception) {
             Log.e(TAG, "Classification failed", e)
             // Fail-safe: assume safe
-            ClassificationResult(isSafe = true, confidence = 0.0f, category = "error")
+            ClassificationResult(
+                isSafe = true,
+                confidence = 0.0f,
+                category = "error",
+                scores = floatArrayOf(0f, 0f, 1f, 0f, 0f),
+                topClass = "neutral"
+            )
         }
     }
 
@@ -150,10 +199,39 @@ object RustMLBridge {
 }
 
 /**
- * Classification result data class
+ * Classification result with 5-class NSFW scores
+ * Classes: drawing, hentai, neutral, porn, sexy
  */
 data class ClassificationResult(
+    /** Whether content is safe (neutral + drawing > hentai + porn + sexy) */
     val isSafe: Boolean,
+    /** Aggregate confidence of safety determination */
     val confidence: Float,
-    val category: String
-)
+    /** Top category name */
+    val category: String,
+    /** Raw per-class scores [drawing, hentai, neutral, porn, sexy] */
+    val scores: FloatArray = floatArrayOf(0f, 0f, 1f, 0f, 0f),
+    /** Name of highest-scoring class */
+    val topClass: String = "neutral"
+) {
+    /** Whether content is adult (porn or hentai) */
+    val isAdult: Boolean get() = category == "porn" || category == "hentai"
+    
+    /** Whether content is suggestive (sexy) */
+    val isSuggestive: Boolean get() = category == "sexy"
+    
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is ClassificationResult) return false
+        return isSafe == other.isSafe && confidence == other.confidence &&
+            category == other.category && scores.contentEquals(other.scores)
+    }
+    
+    override fun hashCode(): Int {
+        var result = isSafe.hashCode()
+        result = 31 * result + confidence.hashCode()
+        result = 31 * result + category.hashCode()
+        result = 31 * result + scores.contentHashCode()
+        return result
+    }
+}

@@ -218,12 +218,25 @@ See [EVALUATION.md](EVALUATION.md) for complete methodology and results.
 - **JNI**: `jni-rs` for Java interop
 - **Logging**: `android_logger`
 
-### Machine Learning
-- **Framework**: TensorFlow Lite
-- **Model**: MobileNetV2-based NSFW classifier (INT8 quantized)
-- **Hardware Acceleration**: NNAPI delegate, GPU delegate (when available)
-- **Input**: 224×224 RGB images
-- **Output**: Multi-class probabilities (safe, adult, violence, gore, hate)
+### Machine Learning (3-Phase Strategy)
+
+**Phase 1 (MVP)**: GantMan/nsfw_model — MobileNetV2 1.4, INT8, ~3MB, MIT license
+- **Backend**: `tract` (pure Rust)
+- **Output**: 5 classes (Drawing, Hentai, Neutral, Porn, Sexy) → mapped to safe/unsafe
+
+**Phase 2**: Custom fine-tuned EfficientNet-Lite0 or MobileNetV3-Large
+- **Output**: Multi-label (safe, adult, violence, gore, hate)
+- **Training data**: NSFW + violence + gore datasets
+
+**Phase 3**: Multi-model ensemble + hardware acceleration
+- **Primary**: Content classifier (< 15ms)
+- **Secondary**: Text-in-image OCR for hate speech
+- **Acceleration**: NNAPI delegate, GPU delegate, ARM NEON SIMD
+
+**Common specs**:
+- **Input**: 224×224 RGB images, normalized
+- **Format**: TFLite / ONNX
+- **Inference**: On-device only, < 30ms budget
 
 ---
 

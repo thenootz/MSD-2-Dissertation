@@ -99,6 +99,14 @@ android/app/src/main/jniLibs/
 
 # ML Models (large files, download separately)
 android/app/src/main/assets/*.tflite
+android/app/src/main/assets/*.onnx
+
+# Model conversion scripts artifacts
+scripts/*.tflite
+scripts/*.onnx
+scripts/*.h5
+scripts/*.zip
+scripts/mobilenet_v2_140_224/
 
 # OS Files
 .DS_Store
@@ -111,6 +119,7 @@ __pycache__/
 *.pyd
 .Python
 venv/
+.venv/
 env/
 
 # Backup files

@@ -90,16 +90,24 @@ cd android
 ## ⚠️ Important Notes
 
 ### ML Model Required
-The app references `nsfw_mobilenet_v2_140_224_int8.tflite` but doesn't include it (large file). You'll need to:
-- **Option 1**: Download a pre-trained NSFW classifier
-- **Option 2**: Train your own model
-- **Option 3**: Use a placeholder for testing (modify code to skip ML)
+The app references `nsfw_mobilenet_v2_140_224_int8.tflite` but doesn't include it (large file).
 
-### TFLite Integration
+**Recommended approach (Phase 1)**:
+1. Download [GantMan/nsfw_model](https://github.com/GantMan/nsfw_model) (MIT license)
+2. Use the MobileNetV2 1.4 INT8 quantized variant (~3MB)
+3. Place at `android/app/src/main/assets/nsfw_mobilenet_v2_140_224_int8.tflite`
+4. 5 output classes: Drawing, Hentai, Neutral, Porn, Sexy
+
+**Future phases**:
+- Phase 2: Fine-tune EfficientNet-Lite0 for multi-category (safe, adult, violence, gore, hate)
+- Phase 3: Add text-in-image detection for hate speech + hardware-accelerated inference
+
+### Inference Integration
 The Rust inference module (`rust/src/inference.rs`) contains stubs. To complete:
-1. Add `tflite` crate to Cargo.toml (or use another inference library)
-2. Implement actual model loading and inference
-3. Add preprocessing (resize to 224x224, normalize)
+1. Add `tract-onnx` crate to Cargo.toml (pure Rust, no C dependencies — easiest for Android cross-compilation)
+2. Implement model loading and inference via tract
+3. Add preprocessing (resize to 224×224, RGBA→RGB, normalize to [-1, 1])
+4. Map 5-class output to binary safe/unsafe for policy engine
 
 ### Testing Without ML Model
 

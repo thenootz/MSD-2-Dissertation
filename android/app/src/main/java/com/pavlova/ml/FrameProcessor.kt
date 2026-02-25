@@ -14,7 +14,12 @@ class FrameProcessor(private val context: Context) {
 
     companion object {
         private const val TAG = "FrameProcessor"
-        private const val CONFIDENCE_THRESHOLD = 0.75f
+        
+        // Threshold for triggering filter on unsafe content
+        private const val UNSAFE_THRESHOLD = 0.60f
+        
+        // Threshold for suggestive (sexy) content — more lenient
+        private const val SUGGESTIVE_THRESHOLD = 0.80f
     }
 
     private val overlayManager = OverlayManager(context)
@@ -40,13 +45,25 @@ class FrameProcessor(private val context: Context) {
             
             val inferenceTime = System.currentTimeMillis() - startTime
             
-            // Check if content is unsafe
-            if (result.isSafe) {
+            // Check if content should be filtered
+            val shouldFilter = when {
+                // Adult content (porn/hentai): filter if above threshold
+                result.isAdult && result.confidence >= UNSAFE_THRESHOLD -> true
+                // Suggestive content (sexy): higher threshold required
+                result.isSuggestive && result.confidence >= SUGGESTIVE_THRESHOLD -> true
+                // Safe content (neutral/drawing): don't filter
+                result.isSafe -> false
+                // Catch-all: filter if unsafe score is high
+                !result.isSafe && result.confidence >= UNSAFE_THRESHOLD -> true
+                else -> false
+            }
+            
+            if (!shouldFilter) {
                 // Hide overlay for safe content
                 overlayManager.hideOverlay()
             } else {
                 // Generate blur effect using Rust
-                val blurRadius = calculateBlurRadius(result.confidence)
+                val blurRadius = calculateBlurRadius(result)
                 val blurredData = RustMLBridge.generateBlur(
                     imageData,
                     width,
@@ -93,16 +110,25 @@ class FrameProcessor(private val context: Context) {
     }
 
     /**
-     * Calculate blur radius based on confidence
-     * Higher confidence = stronger blur
+     * Calculate blur radius based on content category and confidence
+     * Adult content gets stronger blur than suggestive content
      */
-    private fun calculateBlurRadius(confidence: Float): Float {
-        return when {
-            confidence > 0.95f -> 25f  // Very strong blur
-            confidence > 0.85f -> 15f  // Strong blur
-            confidence > 0.75f -> 10f  // Medium blur
-            else -> 5f                 // Light blur
+    private fun calculateBlurRadius(result: ClassificationResult): Float {
+        val baseRadius = when {
+            result.isAdult -> when {
+                result.confidence > 0.95f -> 25f  // Very strong blur for confident adult
+                result.confidence > 0.85f -> 20f
+                result.confidence > 0.75f -> 15f
+                else -> 12f
+            }
+            result.isSuggestive -> when {
+                result.confidence > 0.95f -> 15f  // Moderate blur for suggestive
+                result.confidence > 0.85f -> 10f
+                else -> 8f
+            }
+            else -> 5f  // Light blur as fallback
         }
+        return baseRadius
     }
 
     /**

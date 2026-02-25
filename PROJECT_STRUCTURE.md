@@ -374,14 +374,24 @@ buildTypes {
 
 ## ML Model Management
 
-### Model Integration Checklist
+### ML Strategy: 3 Phases
 
-- [ ] Model in TFLite format
-- [ ] Input shape documented (typically 224x224x3)
-- [ ] Output classes defined (safe, adult, violence, etc.)
-- [ ] Quantization applied (INT8 for speed)
+| Phase | Model | Architecture | Output | Size | Backend |
+|---|---|---|---|---|---|
+| **1 (MVP)** | GantMan/nsfw_model | MobileNetV2 1.4 | 5-class NSFW | ~3MB | tract |
+| **2** | Custom fine-tuned | EfficientNet-Lite0 | 5-class multi-label | ~5MB | tract/ort |
+| **3** | Ensemble | EfficientNet-Lite0 + OCR | multi-model | ~10MB | ort + NNAPI |
+
+### Model Integration Checklist (Phase 1)
+
+- [ ] Download GantMan/nsfw_model MobileNetV2 1.4 INT8
+- [ ] Place at `android/app/src/main/assets/nsfw_mobilenet_v2_140_224_int8.tflite`
+- [ ] Input shape: 224×224×3 RGB, normalized to [-1, 1]
+- [ ] Output classes: Drawing, Hentai, Neutral, Porn, Sexy
+- [ ] Map to policy categories (Neutral+Drawing→safe, Porn+Hentai→adult)
+- [ ] Integrate `tract` crate in Rust inference module
 - [ ] Checksum calculated and hardcoded
-- [ ] License compatible (many NSFW models are open-source)
+- [ ] License verified: MIT
 
 ### Model Metadata
 
@@ -389,14 +399,20 @@ buildTypes {
 
 ```json
 {
-  "name": "NSFW Classifier",
+  "name": "NSFW Classifier (Phase 1)",
   "version": "1.0.0",
   "framework": "TensorFlow Lite",
+  "inference_backend": "tract (pure Rust)",
   "input_shape": [1, 224, 224, 3],
   "input_type": "float32",
   "mean": [127.5, 127.5, 127.5],
   "std": [127.5, 127.5, 127.5],
-  "output_classes": ["safe", "adult", "violence", "gore", "hate"],
+  "output_classes": ["drawing", "hentai", "neutral", "porn", "sexy"],
+  "output_mapping": {
+    "safe": ["neutral", "drawing"],
+    "adult_content": ["porn", "hentai"],
+    "threshold_dependent": ["sexy"]
+  },
   "quantization": "int8",
   "source": "https://github.com/GantMan/nsfw_model",
   "license": "MIT",

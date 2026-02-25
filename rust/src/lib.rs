@@ -55,7 +55,7 @@ pub extern "C" fn Java_com_pavlova_ml_RustMLBridge_nativeInit(
 }
 
 /// Classify a frame (image data)
-/// Returns array: [confidence_safe, confidence_unsafe]
+/// Returns float array of 5 class scores: [drawing, hentai, neutral, porn, sexy]
 #[no_mangle]
 pub extern "C" fn Java_com_pavlova_ml_RustMLBridge_nativeClassifyFrame<'local>(
     env: JNIEnv<'local>,
@@ -71,34 +71,37 @@ pub extern "C" fn Java_com_pavlova_ml_RustMLBridge_nativeClassifyFrame<'local>(
         Ok(bytes) => bytes,
         Err(e) => {
             error!("Failed to convert image data: {:?}", e);
-            return env.new_float_array(2).unwrap().into_raw();
+            let output = env.new_float_array(5).unwrap();
+            // Return neutral-dominant default: [0, 0, 1, 0, 0]
+            env.set_float_array_region(&output, 0, &[0.0, 0.0, 1.0, 0.0, 0.0]).unwrap();
+            return output.into_raw();
         }
     };
 
     // Classify using ML engine
     let ml_engine = ML_ENGINE.lock().unwrap();
-    let result = match &*ml_engine {
+    let scores = match &*ml_engine {
         Some(engine) => {
             match engine.classify(&image_bytes, width as usize, height as usize) {
-                Ok(confidence) => confidence,
+                Ok(result) => result.scores,
                 Err(e) => {
                     error!("Classification failed: {:?}", e);
-                    0.5 // Default to safe
+                    [0.0, 0.0, 1.0, 0.0, 0.0] // Default to neutral
                 }
             }
         }
         None => {
             error!("ML engine not initialized");
-            0.5
+            [0.0, 0.0, 1.0, 0.0, 0.0] // Default to neutral
         }
     };
 
     let elapsed = start_time.elapsed();
     info!("Classification took {:?}", elapsed);
 
-    // Return [confidence_safe, confidence_unsafe]
-    let output = env.new_float_array(2).unwrap();
-    env.set_float_array_region(&output, 0, &[result, 1.0 - result]).unwrap();
+    // Return [drawing, hentai, neutral, porn, sexy]
+    let output = env.new_float_array(5).unwrap();
+    env.set_float_array_region(&output, 0, &scores).unwrap();
     output.into_raw()
 }
 

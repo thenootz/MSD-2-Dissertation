@@ -960,11 +960,83 @@ data class ClassificationResult(
 
 ---
 
+## ML Model Strategy — 3 Phases
+
+### Phase 1: Get It Working (MVP)
+
+**Model**: [GantMan/nsfw_model](https://github.com/GantMan/nsfw_model) — MobileNetV2 (width 1.4), INT8 quantized
+
+- **Format**: TFLite (`.tflite`)
+- **Input**: 224×224×3 RGB, normalized to `[-1, 1]` (mean=127.5, std=127.5)
+- **Output**: 5 classes — `Drawing`, `Hentai`, `Neutral`, `Porn`, `Sexy`
+- **Size**: ~3MB (INT8 quantized)
+- **License**: MIT
+- **Inference backend**: `tract-onnx` (pure Rust, no C dependencies — easiest cross-compilation for Android)
+
+**Category mapping to Pavlova policy engine**:
+| Model Output | Pavlova Category | Policy Action |
+|---|---|---|
+| `Neutral` | `safe` | Allow |
+| `Drawing` | `safe` | Allow |
+| `Sexy` | threshold-dependent | User preference |
+| `Porn` | `adult_content` | Blur/Block |
+| `Hentai` | `adult_content` | Blur/Block |
+
+**Steps**:
+1. Download `mobilenet_v2_140_224` from GantMan repo
+2. Convert to INT8 TFLite (scripts provided in repo)
+3. Place at `android/app/src/main/assets/nsfw_mobilenet_v2_140_224_int8.tflite`
+4. Integrate `tract` crate for inference in `rust/src/inference.rs`
+5. Map 5 output classes to policy categories
+
+---
+
+### Phase 2: Improve Accuracy (Multi-Category)
+
+**Model**: Fine-tuned **EfficientNet-Lite0** or **MobileNetV3-Large** on combined datasets
+
+- **Training data**: NSFW datasets + Real Life Violence Situations Dataset (Kaggle) + NUS-WIDE (gore/graphic subset)
+- **Output**: Multi-label — `[safe, adult, violence, gore, hate]`
+- **Size**: ~5MB (INT8 quantized)
+- **Latency**: < 15ms on mid-range devices
+
+**Candidate architectures (ranked by accuracy-to-latency ratio)**:
+
+| Architecture | Size (INT8) | Latency (Pixel 6) | TFLite Support |
+|---|---|---|---|
+| MobileNetV3-Small | ~2MB | ~5ms | Native |
+| MobileNetV3-Large | ~5MB | ~10ms | Native |
+| **EfficientNet-Lite0** | **~5MB** | **~15ms** | **Native** |
+| EfficientNet-Lite2 | ~8MB | ~25ms | Native |
+
+**Alternative pre-trained options**:
+- **Falconsai/nsfw_image_detection** (HuggingFace, Apache 2.0) — ViT-based, higher accuracy, ~20MB INT8 ONNX. Use with `ort` backend.
+- **bumble-tech/private-detector** (Apache 2.0) — EfficientNet-B0, ~5MB, designed for mobile dating app safety.
+
+---
+
+### Phase 3: Advanced Multi-Model Ensemble
+
+**Primary model**: EfficientNet-Lite0 for content classification (< 15ms)
+**Secondary model**: Lightweight text-in-image detector (OCR) for hate speech in screenshots
+**Policy engine**: Combines scores from both models (already architected in `rust/src/policy/`)
+
+**Additional enhancements**:
+- NNAPI delegate and GPU delegate for TFLite hardware acceleration
+- ARM NEON SIMD optimizations for image processing
+- Adaptive quality settings based on device capabilities
+- Object detection for region-based blur (blur only unsafe regions)
+- Profile on real devices and tune thresholds
+
+---
+
 ## Next Steps
 
-1. Implement TFLite integration with actual model
-2. Add ONNX Runtime support as alternative
-3. Optimize SIMD paths for ARM NEON
-4. Profile on real devices
-5. Add adaptive quality settings based on device capabilities
+1. **Phase 1**: Integrate GantMan NSFW model via `tract` crate
+2. **Phase 1**: Implement actual preprocessing (resize → RGB → normalize)
+3. **Phase 1**: End-to-end test on device with screen capture pipeline
+4. **Phase 2**: Collect/curate training data for violence & gore categories
+5. **Phase 2**: Fine-tune EfficientNet-Lite0 with multi-label output
+6. **Phase 3**: Add text-in-image detection for hate speech
+7. **Phase 3**: Optimize with NNAPI/GPU delegates and SIMD
 
