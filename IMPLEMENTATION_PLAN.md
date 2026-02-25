@@ -18,7 +18,7 @@ android create project \
   --name Pavlova \
   --path ./pavlova-android \
   --activity MainActivity \
-  --package com.thesis.pavlova
+  --package com.pavlova
 ```
 
 **Gradle Configuration** (`build.gradle.kts`):
@@ -30,11 +30,11 @@ plugins {
 }
 
 android {
-    namespace = "com.thesis.pavlova"
+    namespace = "com.pavlova"
     compileSdk = 35
     
     defaultConfig {
-        applicationId = "com.thesis.pavlova"
+        applicationId = "com.pavlova"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
@@ -195,10 +195,10 @@ strip = true
 
 ### 2.1 Permission Management System
 
-**File**: `app/src/main/kotlin/com/thesis/pavlova/permissions/PermissionManager.kt`
+**File**: `android/app/src/main/java/com/pavlova/permissions/PermissionManager.kt`
 
 ```kotlin
-package com.thesis.pavlova.permissions
+package com.pavlova.permissions
 
 import android.Manifest
 import android.app.Activity
@@ -277,10 +277,10 @@ class PermissionManager(private val context: Context) {
 
 ### 2.2 MediaProjection Capture Service
 
-**File**: `app/src/main/kotlin/com/thesis/pavlova/capture/ScreenCaptureService.kt`
+**File**: `android/app/src/main/java/com/pavlova/services/ScreenCaptureService.kt`
 
 ```kotlin
-package com.thesis.pavlova.capture
+package com.pavlova.services
 
 import android.app.*
 import android.content.Context
@@ -297,8 +297,8 @@ import android.os.IBinder
 import android.util.DisplayMetrics
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
-import com.thesis.pavlova.R
-import com.thesis.pavlova.processing.FrameProcessor
+import com.pavlova.R
+import com.pavlova.ml.FrameProcessor
 import kotlinx.coroutines.*
 import java.nio.ByteBuffer
 
@@ -510,8 +510,8 @@ class ScreenCaptureService : Service() {
         private const val CHANNEL_ID = "pavlova_capture_channel"
         private const val NOTIFICATION_ID = 1001
         
-        const val ACTION_START_CAPTURE = "com.thesis.pavlova.START_CAPTURE"
-        const val ACTION_STOP_CAPTURE = "com.thesis.pavlova.STOP_CAPTURE"
+        const val ACTION_START_CAPTURE = "com.pavlova.START_CAPTURE"
+        const val ACTION_STOP_CAPTURE = "com.pavlova.STOP_CAPTURE"
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_DATA = "data"
     }
@@ -522,18 +522,18 @@ class ScreenCaptureService : Service() {
 
 ### 2.3 Frame Processing Coordinator
 
-**File**: `app/src/main/kotlin/com/thesis/pavlova/processing/FrameProcessor.kt`
+**File**: `android/app/src/main/java/com/pavlova/ml/FrameProcessor.kt`
 
 ```kotlin
-package com.thesis.pavlova.processing
+package com.pavlova.ml
 
 import android.content.Context
 import android.graphics.Bitmap
-import com.thesis.pavlova.ml.ClassificationResult
-import com.thesis.pavlova.ml.RustMLBridge
-import com.thesis.pavlova.overlay.OverlayManager
-import com.thesis.pavlova.policy.PolicyEngine
-import com.thesis.pavlova.storage.EventLogger
+import com.pavlova.ml.ClassificationResult
+import com.pavlova.ml.RustMLBridge
+import com.pavlova.overlay.OverlayManager
+import com.pavlova.policy.PolicyEngine
+import com.pavlova.data.repository.FilterEventRepository
 import kotlinx.coroutines.*
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -640,10 +640,10 @@ data class FilterDecision(
 
 ### 2.4 Overlay Management Service
 
-**File**: `app/src/main/kotlin/com/thesis/pavlova/overlay/OverlayManager.kt`
+**File**: `android/app/src/main/java/com/pavlova/overlay/OverlayManager.kt`
 
 ```kotlin
-package com.thesis.pavlova.overlay
+package com.pavlova.overlay
 
 import android.content.Context
 import android.graphics.Bitmap
@@ -654,7 +654,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.WindowManager
 import android.widget.ImageView
-import com.thesis.pavlova.R
+import com.pavlova.R
 import kotlinx.coroutines.*
 
 class OverlayManager(private val context: Context) {

@@ -295,7 +295,7 @@ class MediaContextService : NotificationListenerService() {
 
 ### In-App Privacy Controls
 
-**File**: `app/src/main/kotlin/com/thesis/pavlova/ui/PrivacyDashboard.kt`
+**File**: `android/app/src/main/java/com/pavlova/ui/PrivacyDashboard.kt`
 
 ```kotlin
 @Composable
@@ -511,7 +511,7 @@ val db = Room.databaseBuilder(context, AppDatabase::class.java, "pavlova.db")
 
 ```proguard
 # Keep Rust JNI methods
--keepclasseswithmembers class com.thesis.pavlova.ml.RustMLBridge {
+-keepclasseswithmembers class com.pavlova.ml.RustMLBridge {
     native <methods>;
 }
 
@@ -521,7 +521,7 @@ val db = Room.databaseBuilder(context, AppDatabase::class.java, "pavlova.db")
 -optimizations !code/simplification/arithmetic
 
 # Keep data classes for Room
--keep class com.thesis.pavlova.storage.** { *; }
+-keep class com.pavlova.data.** { *; }
 
 # Remove logging in release
 -assumenosideeffects class android.util.Log {

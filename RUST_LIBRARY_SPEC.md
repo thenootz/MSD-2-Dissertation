@@ -837,10 +837,10 @@ criterion_main!(benches);
 
 ### Kotlin Bridge Class
 
-**File**: `app/src/main/kotlin/com/thesis/pavlova/ml/RustMLBridge.kt`
+**File**: `android/app/src/main/java/com/pavlova/ml/RustMLBridge.kt`
 
 ```kotlin
-package com.thesis.pavlova.ml
+package com.pavlova.ml
 
 import android.content.Context
 import java.io.File

@@ -38,7 +38,7 @@ This document outlines the comprehensive evaluation strategy for Pavlova, coveri
 
 ### 1.3 Performance Benchmarking Code
 
-**File**: `app/src/androidTest/kotlin/com/thesis/pavlova/PerformanceBenchmark.kt`
+**File**: `android/app/src/androidTest/java/com/pavlova/PerformanceBenchmark.kt`
 
 ```kotlin
 @RunWith(AndroidJUnit4::class)
@@ -127,7 +127,7 @@ import json
 from datetime import datetime
 
 class PerformanceCollector:
-    def __init__(self, package_name="com.thesis.pavlova"):
+    def __init__(self, package_name="com.pavlova"):
         self.package_name = package_name
         self.data = []
     

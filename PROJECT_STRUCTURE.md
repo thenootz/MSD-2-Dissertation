@@ -225,7 +225,7 @@ cd android
 # Via Android Studio: Run configuration
 # Or via command line:
 ./gradlew installDebug
-adb shell am start -n com.thesis.pavlova/.MainActivity
+adb shell am start -n com.pavlova/.MainActivity
 ```
 
 ---
