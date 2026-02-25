@@ -43,7 +43,7 @@ Pavlova is a privacy-preserving Android application that provides **real-time co
                   │ JNI Bridge
 ┌─────────────────┴───────────────────────────┐
 │  Rust: ML Inference | Image Processing      │
-│         Policy Engine | Memory Pool          │
+│         Policy Engine | Memory Pool         │
 └─────────────────────────────────────────────┘
 ```
 
