@@ -1,0 +1,50 @@
+[package]
+name = "pavlova-core"
+version = "0.1.0"
+edition = "2021"
+authors = ["Pavlova Team"]
+description = "Privacy-preserving ML inference and image processing for Android"
+
+[lib]
+name = "pavlova_core"
+crate-type = ["cdylib"]
+
+[dependencies]
+# JNI bridge
+jni = "0.21"
+
+# Image processing
+image = { version = "0.24", default-features = false, features = ["png", "jpeg"] }
+fast_image_resize = "3.0"
+
+# ML inference - TensorFlow Lite (choose one)
+# tflite = "0.9"  # If using tflite-rs
+
+# Parallelism
+rayon = "1.8"
+
+# Lazy static for global state
+lazy_static = "1.4"
+
+# Logging
+log = "0.4"
+android_logger = "0.13"
+
+# Serialization (optional, for config)
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[target.'cfg(target_os = "android")'.dependencies]
+# Android-specific dependencies
+ndk = "0.8"
+ndk-context = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev]
+opt-level = 1

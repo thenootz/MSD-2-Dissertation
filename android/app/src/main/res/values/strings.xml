@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Pavlova</string>
+    <string name="app_description">Privacy-First Screen Protection</string>
+    
+    <!-- Main Screen -->
+    <string name="start_protection">Start Protection</string>
+    <string name="stop_protection">Stop Protection</string>
+    <string name="status_active">Active</string>
+    <string name="status_inactive">Inactive</string>
+    
+    <!-- Permissions -->
+    <string name="permission_overlay">Overlay Permission</string>
+    <string name="permission_notification">Notification Permission</string>
+    <string name="permission_media_projection">Screen Capture Permission</string>
+    <string name="permission_accessibility">Accessibility Service (Optional)</string>
+    <string name="permission_notification_listener">Notification Listener (Optional)</string>
+    
+    <string name="permission_granted">✓ Granted</string>
+    <string name="permission_required">✗ Required</string>
+    <string name="permission_optional">Optional</string>
+    
+    <!-- Notifications -->
+    <string name="notification_channel_name">Screen Protection</string>
+    <string name="notification_channel_description">Active screen content filtering</string>
+    <string name="notification_title">Pavlova Active</string>
+    <string name="notification_text">Protecting your screen content</string>
+    
+    <!-- Accessibility Service -->
+    <string name="accessibility_service_name">Pavlova Context Service</string>
+    <string name="accessibility_service_description">Provides app context for content filtering (optional). Only tracks which app is in foreground, no input monitoring.</string>
+    
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_filter_strength">Filter Strength</string>
+    <string name="settings_blur_radius">Blur Radius</string>
+    <string name="settings_confidence_threshold">Confidence Threshold</string>
+    <string name="settings_frame_rate">Frame Rate</string>
+    
+    <!-- Privacy Dashboard -->
+    <string name="privacy_dashboard_title">Privacy Dashboard</string>
+    <string name="privacy_events_logged">Events Logged</string>
+    <string name="privacy_no_screenshots">No screenshots stored</string>
+    <string name="privacy_delete_all">Delete All Data</string>
+    <string name="privacy_export">Export Data</string>
+    
+    <!-- Errors -->
+    <string name="error_permission_denied">Permission denied</string>
+    <string name="error_service_failed">Service failed to start</string>
+    <string name="error_ml_init">Failed to initialize ML engine</string>
+</resources>
