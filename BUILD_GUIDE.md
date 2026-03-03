@@ -195,24 +195,10 @@ export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/<version>"
 .\build-rust.ps1
 ```
 
-**macOS / Linux** (manual):
+**macOS / Linux**:
 ```bash
-cd rust
-
-cargo ndk \
-    --target aarch64-linux-android \
-    --target armv7-linux-androideabi \
-    --target x86_64-linux-android \
-    --platform 26 \
-    -- build --release
-
-# Copy .so files to jniLibs
-mkdir -p ../android/app/src/main/jniLibs/{arm64-v8a,armeabi-v7a,x86_64}
-cp target/aarch64-linux-android/release/libpavlova_core.so ../android/app/src/main/jniLibs/arm64-v8a/
-cp target/armv7-linux-androideabi/release/libpavlova_core.so ../android/app/src/main/jniLibs/armeabi-v7a/
-cp target/x86_64-linux-android/release/libpavlova_core.so ../android/app/src/main/jniLibs/x86_64/
-
-cd ..
+chmod +x build-rust.sh
+./build-rust.sh
 ```
 
 **Expected output**:
@@ -251,9 +237,11 @@ You should see `.so` files in all three ABI directories.
 ### 6.1 First-Time Gradle Sync
 
 Android Studio will:
-- Download the Gradle wrapper (version 8.2)
+- Use the included Gradle wrapper (version 8.2)
 - Download all Gradle dependencies
 - Perform a project sync
+
+> **Important**: The Rust native build is **not** auto-triggered by Gradle. You must run `build-rust.ps1` (Windows) or `build-rust.sh` (macOS/Linux) **before** building in Android Studio.
 
 > This may take 2-5 minutes on first run. Watch the bottom status bar for progress.
 
@@ -415,6 +403,8 @@ python scripts/convert_model.py
 # 4. Build Rust native library
 # Windows:
 powershell -ExecutionPolicy Bypass -File .\build-rust.ps1
+# macOS/Linux:
+chmod +x build-rust.sh && ./build-rust.sh
 
 # 5. Open android/ in Android Studio → Sync → Run
 ```
@@ -428,7 +418,7 @@ powershell -ExecutionPolicy Bypass -File .\build-rust.ps1
 | Android Studio       | Hedgehog 2023.1 | Latest stable        |
 | Java (JDK)           | 17              | 17+                  |
 | Android SDK          | API 26          | API 35               |
-| Android NDK          | 25.x            | 26.x or 27.x        |
+| Android NDK          | 25.x            | 26.x or 27.x         |
 | Rust                 | 1.70+           | Latest stable        |
 | cargo-ndk            | 3.x             | Latest               |
 | Python               | 3.8+            | 3.10-3.12            |

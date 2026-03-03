@@ -130,7 +130,7 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
 
-// Task to build Rust library before compiling Java/Kotlin
+// Task to build Rust library (run manually: ./gradlew buildRustLibrary)
 tasks.register<Exec>("buildRustLibrary") {
     workingDir = file("../../rust")
     
@@ -144,7 +144,7 @@ tasks.register<Exec>("buildRustLibrary") {
     )
 }
 
-// Copy Rust libraries to jniLibs
+// Copy Rust libraries to jniLibs (run manually: ./gradlew copyRustLibs)
 tasks.register<Copy>("copyRustLibs") {
     dependsOn("buildRustLibrary")
     
@@ -161,9 +161,7 @@ tasks.register<Copy>("copyRustLibs") {
     into("src/main/jniLibs")
 }
 
-// Hook into the build process
-tasks.whenTaskAdded {
-    if (name == "mergeDebugJniLibFolders" || name == "mergeReleaseJniLibFolders") {
-        dependsOn("copyRustLibs")
-    }
-}
+// NOTE: The Rust build is NOT auto-triggered by Gradle.
+// Run build-rust.ps1 (Windows) or build-rust.sh (macOS/Linux) BEFORE
+// building the Android app. This avoids build failures when cargo-ndk
+// or the Android NDK toolchain is not configured.

@@ -92,7 +92,6 @@ lint/tmp/
 
 # Rust build artifacts
 rust/target/
-rust/Cargo.lock
 
 # Native libraries
 android/app/src/main/jniLibs/
