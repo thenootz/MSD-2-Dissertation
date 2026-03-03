@@ -9,36 +9,22 @@ description = "Privacy-preserving ML inference and image processing for Android"
 name = "pavlova_core"
 crate-type = ["cdylib"]
 
+[features]
+default = ["android"]
+android = ["jni", "android_logger", "lazy_static"]
+
 [dependencies]
-# JNI bridge
-jni = "0.21"
-
-# Image processing
-image = { version = "0.24", default-features = false, features = ["png", "jpeg"] }
-fast_image_resize = "3.0"
-
 # ML inference - tract (pure Rust, no C dependencies)
 tract-onnx = "0.21"
 tract-core = "0.21"
 
-# Parallelism
-rayon = "1.8"
-
-# Lazy static for global state
-lazy_static = "1.4"
-
 # Logging
 log = "0.4"
-android_logger = "0.13"
 
-# Serialization (for config and model metadata)
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-
-[target.'cfg(target_os = "android")'.dependencies]
-# Android-specific dependencies
-ndk = "0.8"
-ndk-context = "0.1"
+# Optional: JNI / Android (enabled by default via "android" feature)
+jni = { version = "0.21", optional = true }
+android_logger = { version = "0.13", optional = true }
+lazy_static = { version = "1.4", optional = true }
 
 [profile.release]
 opt-level = 3

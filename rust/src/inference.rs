@@ -2,14 +2,7 @@ use std::error::Error;
 use std::path::Path;
 use tract_onnx::prelude::*;
 
-/// GantMan NSFW model output classes
-/// Order matches the model's output tensor
-const CLASSES: [&str; 5] = ["drawing", "hentai", "neutral", "porn", "sexy"];
-
-/// Model input dimensions (MobileNetV2 1.4)
-pub const MODEL_INPUT_WIDTH: usize = 224;
-pub const MODEL_INPUT_HEIGHT: usize = 224;
-pub const MODEL_INPUT_CHANNELS: usize = 3;
+use crate::config::{CLASSES, MODEL_INPUT_WIDTH, MODEL_INPUT_HEIGHT, MODEL_INPUT_CHANNELS};
 
 /// Classification result with per-class scores
 #[derive(Debug, Clone)]

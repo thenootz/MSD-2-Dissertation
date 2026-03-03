@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use crate::inference::{MODEL_INPUT_WIDTH, MODEL_INPUT_HEIGHT, MODEL_INPUT_CHANNELS};
+use crate::config::{MODEL_INPUT_WIDTH, MODEL_INPUT_HEIGHT, MODEL_INPUT_CHANNELS};
 
 /// Preprocess RGBA image data for MobileNetV2 model inference
 /// Pipeline: RGBA → resize to 224×224 → drop alpha → normalize to [-1, 1] → NCHW layout

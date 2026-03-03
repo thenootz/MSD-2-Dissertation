@@ -1,20 +1,24 @@
-use jni::JNIEnv;
-use jni::objects::{JClass, JString, JByteArray};
-use jni::sys::{jboolean, jbyteArray, jfloatArray, jint};
-use log::{info, error};
-use std::sync::Mutex;
-
+mod config;
 mod image;
-mod inference;
+pub mod inference;
 mod utils;
 
-use crate::image::{blur, pixelate};
-use crate::inference::MLEngine;
+// --- Android / JNI entry points (feature-gated) ---
+#[cfg(feature = "android")]
+mod android {
+    use jni::JNIEnv;
+    use jni::objects::{JClass, JString, JByteArray};
+    use jni::sys::{jboolean, jbyteArray, jfloatArray, jint};
+    use log::{info, error};
+    use std::sync::Mutex;
 
-// Global ML engine instance
-lazy_static::lazy_static! {
-    static ref ML_ENGINE: Mutex<Option<MLEngine>> = Mutex::new(None);
-}
+    use crate::image::{blur, pixelate};
+    use crate::inference::MLEngine;
+
+    // Global ML engine instance
+    lazy_static::lazy_static! {
+        static ref ML_ENGINE: Mutex<Option<MLEngine>> = Mutex::new(None);
+    }
 
 /// Initialize the ML engine with a model file
 #[no_mangle]
@@ -198,3 +202,5 @@ pub extern "C" fn Java_com_pavlova_ml_RustMLBridge_nativeDestroy(
     *ml_engine = None;
     info!("ML engine destroyed");
 }
+
+} // mod android
