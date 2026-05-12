@@ -90,9 +90,13 @@ lint/tmp/
 # Android Profiling
 *.hprof
 
-# ML Models (large files, download separately)
+# ML Models (large files — regenerate via scripts/collect_models.py)
 android/app/src/main/assets/*.tflite
 android/app/src/main/assets/*.onnx
+
+# Model conversion temp files
+scripts/*.onnx
+scripts/tmp_tf/
 
 # OS Files
 .DS_Store

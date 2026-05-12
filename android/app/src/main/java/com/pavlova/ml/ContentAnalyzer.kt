@@ -6,58 +6,125 @@ import android.util.Log
 /**
  * Orchestrates the full content analysis pipeline:
  *   1. OCR text extraction (ML Kit)
- *   2. Sentiment analysis (TFLite — placeholder for MobileBERT)
- *   3. Toxicity scoring (TFLite — placeholder)
- *   4. Topic classification (keyword-based MVP, TFLite later)
- *   5. Emotion detection (keyword-based MVP, TFLite later)
- *   6. Persuasion scoring (heuristic MVP)
+ *   2. Sentiment analysis (RoBERTa TFLite → keyword fallback)
+ *   3. Toxicity scoring (RoBERTa TFLite → keyword fallback)
+ *   4. Topic classification (keyword-based — custom TFLite later)
+ *   5. Emotion detection (keyword-based — custom TFLite later)
+ *   6. Persuasion scoring (keyword-based — custom TFLite later)
+ *   7. Semantic embedding (SBERT TFLite → hash fallback)
  *
- * Phase 1 uses keyword heuristics. Phase 2 swaps in real TFLite NLP models.
+ * Models are loaded lazily via [initialize]. If a model file is not
+ * present in assets/, that model's slot gracefully falls back to
+ * keyword heuristics — no crash, no missing functionality.
  */
 object ContentAnalyzer {
     private const val TAG = "ContentAnalyzer"
+
+    // TFLite NLP runners (lazy-loaded via initialize)
+    private var sentimentRunner: NlpModelRunner? = null
+    private var toxicityRunner: NlpModelRunner? = null
+    private var embeddingEngine: EmbeddingEngine? = null
+
+    private var initialized = false
+
+    /**
+     * Load TFLite models. Call once from Application.onCreate or first use.
+     * Safe to call multiple times — idempotent.
+     */
+    fun initialize(context: Context) {
+        if (initialized) return
+
+        sentimentRunner = NlpModelRunner(
+            context = context,
+            modelFileName = "roberta_sentiment.tflite",
+            maxSeqLen = 128,
+            numClasses = 3,
+            labels = listOf("negative", "neutral", "positive")
+        ).also { it.load() }
+
+        toxicityRunner = NlpModelRunner(
+            context = context,
+            modelFileName = "roberta_toxicity.tflite",
+            maxSeqLen = 128,
+            numClasses = 2,
+            labels = listOf("benign", "toxic")
+        ).also { it.load() }
+
+        embeddingEngine = EmbeddingEngine(context).also { it.load() }
+
+        val modelStatus = listOf(
+            "sentiment" to (sentimentRunner?.isAvailable == true),
+            "toxicity" to (toxicityRunner?.isAvailable == true),
+            "sbert" to (embeddingEngine?.isModelLoaded == true)
+        )
+        Log.d(TAG, "Models: ${modelStatus.joinToString { "${it.first}=${if (it.second) "TFLite" else "heuristic"}" }}")
+        initialized = true
+    }
 
     /**
      * Analyze a captured frame: OCR → NLP pipeline → ContentAnalysis
      */
     suspend fun analyze(imageData: ByteArray, width: Int, height: Int): ContentAnalysis {
         val startTime = System.currentTimeMillis()
-
-        // Step 1: OCR
         val text = TextExtractor.extractText(imageData, width, height)
         if (text.isBlank()) {
             return ContentAnalysis(processingTimeMs = System.currentTimeMillis() - startTime)
         }
-
-        // Step 2-6: NLP analysis on extracted text
         val analysis = analyzeText(text)
-
         val elapsed = System.currentTimeMillis() - startTime
-        Log.d(TAG, "Full analysis in ${elapsed}ms: sentiment=${analysis.sentimentScore}, " +
+        Log.d(TAG, "Analysis in ${elapsed}ms: sentiment=${analysis.sentimentScore}, " +
                 "topics=${analysis.topics}, toxicity=${analysis.toxicityScore}")
-
         return analysis.copy(processingTimeMs = elapsed)
     }
 
     /**
      * Analyze extracted text through the NLP pipeline.
-     * Phase 1: keyword heuristics. Phase 2: swap in TFLite models.
+     * Uses TFLite models when available, keyword heuristics otherwise.
      */
     fun analyzeText(text: String): ContentAnalysis {
         val lowerText = text.lowercase()
 
+        // Sentiment: RoBERTa model → keyword fallback
+        val sentimentScore = if (sentimentRunner?.isAvailable == true) {
+            val dist = sentimentRunner!!.predictDistribution(text)
+            val pos = dist["positive"] ?: 0f
+            val neg = dist["negative"] ?: 0f
+            (pos - neg).coerceIn(-1f, 1f)
+        } else {
+            analyzeSentimentKeyword(lowerText)
+        }
+
+        // Toxicity: RoBERTa model → keyword fallback
+        val toxicityScore = if (toxicityRunner?.isAvailable == true) {
+            val dist = toxicityRunner!!.predictDistribution(text)
+            dist["toxic"] ?: 0f
+        } else {
+            scoreToxicityKeyword(lowerText)
+        }
+
+        // Embedding: SBERT model → hash fallback
+        val embedding = embeddingEngine?.embed(text)
+
         return ContentAnalysis(
             extractedText = text,
             topics = classifyTopics(lowerText),
-            sentimentScore = analyzeSentiment(lowerText),
+            sentimentScore = sentimentScore,
             emotionLabel = detectEmotion(lowerText),
-            toxicityScore = scoreToxicity(lowerText),
+            toxicityScore = toxicityScore,
             persuasionScore = scorePersuasion(lowerText),
-            creatorId = extractCreatorId(text)
+            creatorId = extractCreatorId(text),
+            embedding = embedding
         )
     }
 
-    // --- Phase 1: Keyword-based heuristics (to be replaced by TFLite models) ---
+    fun destroy() {
+        sentimentRunner?.close()
+        toxicityRunner?.close()
+        embeddingEngine?.close()
+        initialized = false
+    }
+
+    // --- Keyword heuristics (used when TFLite models are not available) ---
 
     private val TOPIC_KEYWORDS = mapOf(
         "politics" to listOf("election", "vote", "democrat", "republican", "trump", "biden", "congress", "political", "government", "policy", "liberal", "conservative"),
@@ -82,7 +149,7 @@ object ContentAnalyzer {
     private val POSITIVE_WORDS = setOf("love", "great", "amazing", "wonderful", "happy", "beautiful", "excellent", "fantastic", "awesome", "good", "best", "perfect")
     private val NEGATIVE_WORDS = setOf("hate", "terrible", "horrible", "awful", "angry", "disgusting", "worst", "bad", "stupid", "pathetic", "fear", "scary", "disaster", "crisis")
 
-    private fun analyzeSentiment(text: String): Float {
+    private fun analyzeSentimentKeyword(text: String): Float {
         val words = text.split(Regex("\\W+"))
         val posCount = words.count { it in POSITIVE_WORDS }
         val negCount = words.count { it in NEGATIVE_WORDS }
@@ -100,15 +167,15 @@ object ContentAnalyzer {
             "disgust" to listOf("disgusting", "gross", "revolting", "vile", "sickening")
         )
         val scores = emotions.mapValues { (_, words) -> words.count { text.contains(it) } }
-        val topEmotion = scores.maxByOrNull { it.value }
-        return if (topEmotion != null && topEmotion.value > 0) topEmotion.key else "neutral"
+        val top = scores.maxByOrNull { it.value }
+        return if (top != null && top.value > 0) top.key else "neutral"
     }
 
     private val TOXIC_PATTERNS = listOf("kill", "die", "idiot", "moron", "shut up", "loser", "trash", "garbage", "worthless", "scum")
 
-    private fun scoreToxicity(text: String): Float {
+    private fun scoreToxicityKeyword(text: String): Float {
         val matchCount = TOXIC_PATTERNS.count { text.contains(it) }
-        return (matchCount / 3f).coerceIn(0f, 1f) // 3+ matches = max toxicity
+        return (matchCount / 3f).coerceIn(0f, 1f)
     }
 
     private val PERSUASION_PATTERNS = listOf(
@@ -122,9 +189,6 @@ object ContentAnalyzer {
         return (matchCount / 3f).coerceIn(0f, 1f)
     }
 
-    /**
-     * Extract @ mentions or creator-like patterns from text. Returns a hash.
-     */
     private fun extractCreatorId(text: String): String? {
         val mentionPattern = Regex("@([\\w.]+)")
         val match = mentionPattern.find(text)

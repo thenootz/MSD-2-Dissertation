@@ -2,7 +2,7 @@ package com.pavlova.ml
 
 /**
  * Analysis result for a single content item.
- * Replaces the old NSFW ClassificationResult with multi-dimensional NLP scores.
+ * Multi-dimensional NLP scores from the RoBERTa + SBERT + keyword pipeline.
  */
 data class ContentAnalysis(
     /** OCR-extracted text from the feed item */
@@ -25,6 +25,9 @@ data class ContentAnalysis(
 
     /** Hashed creator identifier extracted from UI */
     val creatorId: String? = null,
+
+    /** SBERT embedding vector for semantic clustering */
+    val embedding: FloatArray? = null,
 
     /** Processing time in milliseconds */
     val processingTimeMs: Long = 0

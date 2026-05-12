@@ -2,6 +2,8 @@ package com.pavlova
 
 import android.app.Application
 import android.util.Log
+import com.pavlova.analysis.ManipulationDetector
+import com.pavlova.ml.ContentAnalyzer
 
 class PavlovaApplication : Application() {
 
@@ -15,5 +17,17 @@ class PavlovaApplication : Application() {
         super.onCreate()
         instance = this
         Log.d(TAG, "Pavlova application starting...")
+
+        // Initialize NLP models (RoBERTa, SBERT — loads from assets, falls back to heuristics)
+        ContentAnalyzer.initialize(this)
+
+        // Initialize analysis engines (LSTM, Isolation Forest, SBERT embeddings)
+        ManipulationDetector.initialize(this)
+    }
+
+    override fun onTerminate() {
+        super.onTerminate()
+        ContentAnalyzer.destroy()
+        ManipulationDetector.destroy()
     }
 }
