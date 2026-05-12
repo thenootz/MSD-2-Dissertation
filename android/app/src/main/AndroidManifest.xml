@@ -12,12 +12,6 @@
     <!-- Wake lock for continuous processing -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
-    <!-- Optional permissions (requested at runtime) -->
-    <uses-permission android:name="android.permission.BIND_ACCESSIBILITY_SERVICE"
-        tools:ignore="ProtectedPermissions" />
-    <uses-permission android:name="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
-        tools:ignore="ProtectedPermissions" />
-
     <!-- Declare hardware features as not required (for broader compatibility) -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.software.leanback" android:required="false" />
@@ -56,31 +50,6 @@
             android:exported="false"
             android:foregroundServiceType="mediaProjection"
             android:stopWithTask="false" />
-
-        <!-- Optional: Accessibility Service for context awareness -->
-        <service
-            android:name=".services.ContextAccessibilityService"
-            android:enabled="true"
-            android:exported="false"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/accessibility_service_config" />
-        </service>
-
-        <!-- Optional: Notification Listener Service for media metadata -->
-        <service
-            android:name=".services.MediaNotificationListenerService"
-            android:enabled="true"
-            android:exported="false"
-            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
-            <intent-filter>
-                <action android:name="android.service.notification.NotificationListenerService" />
-            </intent-filter>
-        </service>
 
         <!-- File Provider for sharing logs/exports -->
         <provider
