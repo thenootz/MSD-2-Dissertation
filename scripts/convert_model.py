@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Download GantMan nsfw_model and convert to ONNX for Pavlova.
+Download GantMan nsfw_model and prepare TFLite and ONNX for Pavlova.
 
 Usage:
     python scripts/convert_model.py
@@ -12,7 +12,7 @@ The script will:
 1. Download nsfw_mobilenet_v2_140_224.zip from GitHub releases
 2. Extract the TFLite model
 3. Convert to ONNX format
-4. Copy to android/app/src/main/assets/
+4. Copy both TFLite and ONNX to android/app/src/main/assets/
 """
 
 import os
@@ -35,7 +35,8 @@ ASSETS_DIR = PROJECT_ROOT / "android" / "app" / "src" / "main" / "assets"
 
 MODEL_ZIP = "nsfw_mobilenet_v2_140_224.zip"
 MODEL_DIR = "mobilenet_v2_140_224"
-TFLITE_FILE = "saved_model.tflite"
+TFLITE_SOURCE_NAME = "saved_model.tflite"
+TFLITE_FINAL_NAME = "nsfw_mobilenet_v2_140_224.tflite"
 ONNX_FILE = "nsfw_mobilenet_v2_140_224.onnx"
 
 RELEASE_URL = f"https://github.com/GantMan/nsfw_model/releases/download/1.1.0/{MODEL_ZIP}"
@@ -58,7 +59,7 @@ def download_model():
 
 def extract_model(zip_path):
     """Extract TFLite model from zip."""
-    tflite_path = SCRIPT_DIR / MODEL_DIR / TFLITE_FILE
+    tflite_path = SCRIPT_DIR / MODEL_DIR / TFLITE_SOURCE_NAME
     if tflite_path.exists():
         print(f"[OK] TFLite model already extracted: {tflite_path}")
         return tflite_path
@@ -103,17 +104,24 @@ def verify_model(onnx_path):
     print("[OK] Model verified")
 
 
-def copy_to_assets(onnx_path):
-    """Copy ONNX model to Android assets."""
+def copy_to_assets(tflite_path, onnx_path):
+    """Copy both TFLite and ONNX models to Android assets."""
     ASSETS_DIR.mkdir(parents=True, exist_ok=True)
-    dest = ASSETS_DIR / ONNX_FILE
-    shutil.copy2(str(onnx_path), str(dest))
-    print(f"[OK] Copied to {dest}")
+
+    # Copy TFLite
+    tflite_dest = ASSETS_DIR / TFLITE_FINAL_NAME
+    shutil.copy2(str(tflite_path), str(tflite_dest))
+    print(f"[OK] Copied TFLite to {tflite_dest}")
+
+    # Copy ONNX
+    onnx_dest = ASSETS_DIR / ONNX_FILE
+    shutil.copy2(str(onnx_path), str(onnx_dest))
+    print(f"[OK] Copied ONNX to {onnx_dest}")
 
 
 def main():
     print("=" * 60)
-    print("GantMan NSFW Model → ONNX Converter for Pavlova")
+    print("GantMan NSFW Model → TFLite & ONNX Preparer for Pavlova")
     print("=" * 60)
     print()
 
@@ -123,10 +131,11 @@ def main():
     tflite_path = extract_model(zip_path)
     onnx_path = convert_to_onnx(tflite_path)
     verify_model(onnx_path)
-    copy_to_assets(onnx_path)
+    copy_to_assets(tflite_path, onnx_path)
 
     print()
-    print("Done! Model is ready at:")
+    print("Done! Models are ready at:")
+    print(f"  {ASSETS_DIR / TFLITE_FINAL_NAME}")
     print(f"  {ASSETS_DIR / ONNX_FILE}")
 
 

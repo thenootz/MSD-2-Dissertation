@@ -2,7 +2,7 @@ package com.pavlova
 
 import android.app.Application
 import android.util.Log
-import com.pavlova.ml.RustMLBridge
+import com.pavlova.ml.TFLiteMLBridge
 
 class PavlovaApplication : Application() {
 
@@ -18,24 +18,24 @@ class PavlovaApplication : Application() {
         
         Log.d(TAG, "Pavlova application starting...")
         
-        // Initialize Rust ML bridge
+        // Initialize Kotlin-native TFLite bridge
         try {
-            RustMLBridge.initialize(this)
-            Log.d(TAG, "Rust ML Bridge initialized successfully")
+            TFLiteMLBridge.initialize(this)
+            Log.d(TAG, "TFLite ML Bridge initialized successfully")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to initialize Rust ML Bridge", e)
+            Log.e(TAG, "Failed to initialize TFLite ML Bridge", e)
         }
     }
 
     override fun onTerminate() {
         super.onTerminate()
         
-        // Cleanup Rust resources
+        // Cleanup resources
         try {
-            RustMLBridge.destroy()
-            Log.d(TAG, "Rust ML Bridge destroyed")
+            TFLiteMLBridge.destroy()
+            Log.d(TAG, "TFLite ML Bridge destroyed")
         } catch (e: Exception) {
-            Log.e(TAG, "Error destroying Rust ML Bridge", e)
+            Log.e(TAG, "Error destroying TFLite ML Bridge", e)
         }
     }
 }

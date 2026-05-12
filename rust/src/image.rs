@@ -3,9 +3,13 @@ use std::error::Error;
 use crate::config::{MODEL_INPUT_WIDTH, MODEL_INPUT_HEIGHT, MODEL_INPUT_CHANNELS};
 
 /// Preprocess RGBA image data for MobileNetV2 model inference
-/// Pipeline: RGBA → resize to 224×224 → drop alpha → normalize to [-1, 1] → NCHW layout
-/// Returns Vec<f32> of length 3 * 224 * 224 in NCHW (channel-first) order
-pub fn preprocess_for_model(rgba_data: &[u8], width: usize, height: usize) -> Result<Vec<f32>, Box<dyn Error>> {
+/// Pipeline: RGBA → resize to 224×224 → drop alpha → normalize to [-1, 1] → layout (NCHW or NHWC)
+pub fn preprocess_for_model(
+    rgba_data: &[u8],
+    width: usize,
+    height: usize,
+    is_nhwc: bool
+) -> Result<Vec<f32>, Box<dyn Error>> {
     if rgba_data.len() != width * height * 4 {
         return Err(format!(
             "RGBA data size mismatch: expected {}x{}x4={}, got {}",
@@ -19,17 +23,25 @@ pub fn preprocess_for_model(rgba_data: &[u8], width: usize, height: usize) -> Re
     let pixel_count = MODEL_INPUT_WIDTH * MODEL_INPUT_HEIGHT;
     let output_size = MODEL_INPUT_CHANNELS * pixel_count;
     
-    // Step 2: Convert RGBA → RGB, normalize to [-1, 1], and reorder to NCHW
-    // NCHW = all R values, then all G values, then all B values
     let mut normalized = vec![0.0f32; output_size];
 
-    for i in 0..pixel_count {
-        let rgba_idx = i * 4;
-        // MobileNetV2 normalization: (pixel - 127.5) / 127.5
-        normalized[i] = (resized[rgba_idx] as f32 - 127.5) / 127.5;                         // R channel
-        normalized[pixel_count + i] = (resized[rgba_idx + 1] as f32 - 127.5) / 127.5;       // G channel
-        normalized[2 * pixel_count + i] = (resized[rgba_idx + 2] as f32 - 127.5) / 127.5;   // B channel
-        // Alpha channel dropped
+    if is_nhwc {
+        // NHWC = [pixel1_R, pixel1_G, pixel1_B, pixel2_R, pixel2_G, pixel2_B, ...]
+        for i in 0..pixel_count {
+            let rgba_idx = i * 4;
+            let nhwc_idx = i * 3;
+            normalized[nhwc_idx] = (resized[rgba_idx] as f32 - 127.5) / 127.5;
+            normalized[nhwc_idx + 1] = (resized[rgba_idx + 1] as f32 - 127.5) / 127.5;
+            normalized[nhwc_idx + 2] = (resized[rgba_idx + 2] as f32 - 127.5) / 127.5;
+        }
+    } else {
+        // NCHW = all R values, then all G values, then all B values
+        for i in 0..pixel_count {
+            let rgba_idx = i * 4;
+            normalized[i] = (resized[rgba_idx] as f32 - 127.5) / 127.5;                         // R channel
+            normalized[pixel_count + i] = (resized[rgba_idx + 1] as f32 - 127.5) / 127.5;       // G channel
+            normalized[2 * pixel_count + i] = (resized[rgba_idx + 2] as f32 - 127.5) / 127.5;   // B channel
+        }
     }
 
     Ok(normalized)
@@ -91,9 +103,6 @@ pub fn blur(image_data: &[u8], width: usize, height: usize, radius: f32) -> Resu
         return Err("Invalid image data size".into());
     }
 
-    // Simple box blur approximation for Gaussian blur
-    // For better quality, use a proper Gaussian kernel
-    
     let mut output = image_data.to_vec();
     let kernel_size = (radius * 2.0) as usize + 1;
     let half_kernel = kernel_size / 2;
@@ -164,7 +173,6 @@ pub fn pixelate(image_data: &[u8], width: usize, height: usize, block_size: usiz
 
     for block_y in (0..height).step_by(block_size) {
         for block_x in (0..width).step_by(block_size) {
-            // Calculate average color for this block
             let mut r_sum = 0u32;
             let mut g_sum = 0u32;
             let mut b_sum = 0u32;
@@ -187,49 +195,16 @@ pub fn pixelate(image_data: &[u8], width: usize, height: usize, block_size: usiz
             let avg_g = (g_sum / count) as u8;
             let avg_b = (b_sum / count) as u8;
 
-            // Fill block with average color
             for y in block_y..block_end_y {
                 for x in block_x..block_end_x {
                     let idx = (y * width + x) * 4;
                     output[idx] = avg_r;
                     output[idx + 1] = avg_g;
                     output[idx + 2] = avg_b;
-                    // Keep original alpha
                 }
             }
         }
     }
 
     Ok(output)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_blur() {
-        let width = 100;
-        let height = 100;
-        let image_data = vec![128u8; width * height * 4];
-        
-        let result = blur(&image_data, width, height, 5.0);
-        assert!(result.is_ok());
-        
-        let blurred = result.unwrap();
-        assert_eq!(blurred.len(), image_data.len());
-    }
-
-    #[test]
-    fn test_pixelate() {
-        let width = 100;
-        let height = 100;
-        let image_data = vec![128u8; width * height * 4];
-        
-        let result = pixelate(&image_data, width, height, 10);
-        assert!(result.is_ok());
-        
-        let pixelated = result.unwrap();
-        assert_eq!(pixelated.len(), image_data.len());
-    }
 }

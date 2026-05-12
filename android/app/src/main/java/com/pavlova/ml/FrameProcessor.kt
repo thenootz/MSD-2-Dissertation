@@ -29,19 +29,24 @@ class FrameProcessor(private val context: Context) {
     private var repository: FilterEventRepository? = null
 
     /**
-     * Process a captured frame
+     * Process a captured frame (handles Image object, extracts data immediately)
      */
-    suspend fun processFrame(image: Image) = withContext(Dispatchers.Default) {
+    suspend fun processFrame(image: Image) {
+        val imageData = imageToByteArray(image)
+        val width = image.width
+        val height = image.height
+        processFrame(imageData, width, height)
+    }
+
+    /**
+     * Process a captured frame from raw data
+     */
+    suspend fun processFrame(imageData: ByteArray, width: Int, height: Int) = withContext(Dispatchers.Default) {
         val startTime = System.currentTimeMillis()
         
         try {
-            // Convert Image to byte array
-            val imageData = imageToByteArray(image)
-            val width = image.width
-            val height = image.height
-            
-            // Call Rust ML inference
-            val result = RustMLBridge.classifyFrame(imageData, width, height)
+            // Call Kotlin TFLite ML inference
+            val result = TFLiteMLBridge.classifyFrame(imageData, width, height)
             
             val inferenceTime = System.currentTimeMillis() - startTime
             
@@ -62,13 +67,13 @@ class FrameProcessor(private val context: Context) {
                 // Hide overlay for safe content
                 overlayManager.hideOverlay()
             } else {
-                // Generate blur effect using Rust
+                // Generate blur effect using TFLite bridge (Kotlin implementation)
                 val blurRadius = calculateBlurRadius(result)
-                val blurredData = RustMLBridge.generateBlur(
+                val blurredData = TFLiteMLBridge.generateBlur(
                     imageData,
                     width,
                     height,
-                    blurRadius
+                    blurRadius.toFloat()
                 )
                 
                 // Convert to Bitmap and show overlay
@@ -76,7 +81,7 @@ class FrameProcessor(private val context: Context) {
                 overlayManager.showOverlay(blurredBitmap)
                 
                 // Log filter event (privacy-preserving)
-                logFilterEvent(result.category, result.confidence)
+                logFilterEvent(result.category, result.confidence, "blur")
             }
             
             val totalTime = System.currentTimeMillis() - startTime
@@ -90,7 +95,7 @@ class FrameProcessor(private val context: Context) {
     /**
      * Convert Android Image to byte array (RGBA format)
      */
-    private fun imageToByteArray(image: Image): ByteArray {
+    fun imageToByteArray(image: Image): ByteArray {
         val plane = image.planes[0]
         val buffer = plane.buffer
         val bytes = ByteArray(buffer.remaining())
@@ -109,59 +114,24 @@ class FrameProcessor(private val context: Context) {
         return bitmap
     }
 
-    /**
-     * Calculate blur radius based on content category and confidence
-     * Adult content gets stronger blur than suggestive content
-     */
-    private fun calculateBlurRadius(result: ClassificationResult): Float {
-        val baseRadius = when {
-            result.isAdult -> when {
-                result.confidence > 0.95f -> 25f  // Very strong blur for confident adult
-                result.confidence > 0.85f -> 20f
-                result.confidence > 0.75f -> 15f
-                else -> 12f
-            }
-            result.isSuggestive -> when {
-                result.confidence > 0.95f -> 15f  // Moderate blur for suggestive
-                result.confidence > 0.85f -> 10f
-                else -> 8f
-            }
-            else -> 5f  // Light blur as fallback
-        }
-        return baseRadius
+    private fun calculateBlurRadius(result: ClassificationResult): Int {
+        // Adult content gets stronger blur
+        return if (result.isAdult) 25 else 15
     }
 
-    /**
-     * Log filter event (privacy-preserving: no screenshots)
-     */
-    private suspend fun logFilterEvent(category: String, confidence: Float) {
-        try {
-            repository?.let { repo ->
-                val event = FilterEvent(
-                    timestamp = System.currentTimeMillis(),
+    private fun logFilterEvent(category: String, confidence: Float, action: String) {
+        // Privacy-preserving: only log category and confidence, no pixel data
+        processingScope.launch {
+            try {
+                repository?.insert(FilterEvent(
                     category = category,
                     confidence = confidence,
-                    action = "blur"
-                )
-                repo.insert(event)
+                    timestamp = System.currentTimeMillis(),
+                    action = action
+                ))
+            } catch (e: Exception) {
+                Log.e(TAG, "Error logging filter event", e)
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to log filter event", e)
         }
-    }
-
-    /**
-     * Initialize repository for event logging
-     */
-    fun setRepository(repo: FilterEventRepository) {
-        this.repository = repo
-    }
-
-    /**
-     * Cleanup resources
-     */
-    fun cleanup() {
-        processingScope.cancel()
-        overlayManager.cleanup()
     }
 }

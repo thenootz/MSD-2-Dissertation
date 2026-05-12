@@ -108,6 +108,14 @@ class ScreenCaptureService : Service() {
                 as MediaProjectionManager
             mediaProjection = projectionManager.getMediaProjection(resultCode, resultData)
             
+            // Fix: Register a callback before creating VirtualDisplay (required on Android 14+)
+            mediaProjection?.registerCallback(object : MediaProjection.Callback() {
+                override fun onStop() {
+                    Log.d(TAG, "MediaProjection stopped")
+                    stopCapture()
+                }
+            }, null)
+            
             // Create ImageReader
             imageReader = ImageReader.newInstance(
                 displayWidth,
@@ -153,10 +161,15 @@ class ScreenCaptureService : Service() {
         try {
             image = reader.acquireLatestImage()
             if (image != null) {
-                // Process frame asynchronously
+                // Extract data synchronously while image is valid
+                val imageData = frameProcessor?.imageToByteArray(image) ?: return
+                val width = image.width
+                val height = image.height
+                
+                // Process frame asynchronously using extracted data
                 serviceScope.launch {
                     try {
-                        frameProcessor?.processFrame(image)
+                        frameProcessor?.processFrame(imageData, width, height)
                     } catch (e: Exception) {
                         Log.e(TAG, "Error processing frame", e)
                     }
@@ -198,7 +211,6 @@ class ScreenCaptureService : Service() {
         stopCapture()
         
         serviceScope.cancel()
-        frameProcessor?.cleanup()
         
         super.onDestroy()
     }

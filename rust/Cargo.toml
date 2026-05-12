@@ -16,6 +16,7 @@ android = ["jni", "android_logger", "lazy_static"]
 [dependencies]
 # ML inference - tract (pure Rust, no C dependencies)
 tract-onnx = "0.21"
+tract-tflite = "0.21"
 tract-core = "0.21"
 
 # Logging

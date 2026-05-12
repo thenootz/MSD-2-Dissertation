@@ -8,25 +8,19 @@ class FilterEventRepository(private val dao: FilterEventDao) {
 
     val allEvents: Flow<List<FilterEvent>> = dao.getAllEvents()
 
-    suspend fun insert(event: FilterEvent): Long {
-        return dao.insert(event)
-    }
+    suspend fun insert(event: FilterEvent): Long = dao.insert(event)
 
     suspend fun deleteAll() {
         dao.deleteAll()
     }
 
-    suspend fun getEventCount(): Int {
-        return dao.getEventCount()
-    }
+    suspend fun getEventCount(): Int = dao.getEventCount()
 
-    fun getEventsBetween(startTime: Long, endTime: Long): Flow<List<FilterEvent>> {
-        return dao.getEventsBetween(startTime, endTime)
-    }
+    fun getEventsBetween(startTime: Long, endTime: Long): Flow<List<FilterEvent>> =
+        dao.getEventsBetween(startTime, endTime)
 
-    fun getEventsByCategory(category: String): Flow<List<FilterEvent>> {
-        return dao.getEventsByCategory(category)
-    }
+    fun getEventsByCategory(category: String): Flow<List<FilterEvent>> =
+        dao.getEventsByCategory(category)
 
     suspend fun deleteOlderThan(beforeTime: Long) {
         dao.deleteOlderThan(beforeTime)

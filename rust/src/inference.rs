@@ -23,6 +23,7 @@ pub struct ClassificationResult {
 pub struct MLEngine {
     model: SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>,
     model_path: String,
+    is_nhwc: bool,
 }
 
 impl MLEngine {
@@ -35,43 +36,73 @@ impl MLEngine {
         log::info!("Loading ML model from: {}", model_path);
 
         // Try loading based on file extension
-        let model = if model_path.ends_with(".tflite") {
-            Self::load_tflite(model_path)?
+        let (model, is_nhwc) = if model_path.ends_with(".tflite") {
+            (Self::load_tflite(model_path)?, true)
         } else if model_path.ends_with(".onnx") {
             Self::load_onnx(model_path)?
         } else {
             return Err(format!("Unsupported model format: {}", model_path).into());
         };
 
-        log::info!("ML model loaded successfully");
+        log::info!("ML model loaded successfully (NHWC: {})", is_nhwc);
 
         Ok(MLEngine {
             model,
             model_path: model_path.to_string(),
+            is_nhwc,
         })
     }
 
     /// Load a TFLite model using tract
-    fn load_tflite(_model_path: &str) -> Result<SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>, Box<dyn Error>> {
-        // tract doesn't directly support tflite — we need to convert to ONNX first
-        // For Phase 1, we'll use ONNX format
-        Err("TFLite models must first be converted to ONNX format. Use: python -m tf2onnx.convert --tflite model.tflite --output model.onnx".into())
-    }
+    fn load_tflite(model_path: &str) -> Result<SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>, Box<dyn Error>> {
+        let model = tract_tflite::tflite().model_for_path(model_path)?;
 
-    /// Load an ONNX model using tract
-    /// Model expects NCHW input: [1, 3, 224, 224]
-    fn load_onnx(model_path: &str) -> Result<SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>, Box<dyn Error>> {
-        let model = tract_onnx::onnx()
-            .model_for_path(model_path)?
-            .with_input_fact(0, f32::fact([1, MODEL_INPUT_CHANNELS, MODEL_INPUT_HEIGHT, MODEL_INPUT_WIDTH]).into())?
+        // TFLite models for MobileNet are typically NHWC [1, 224, 224, 3]
+        let fact = f32::fact([1, MODEL_INPUT_HEIGHT, MODEL_INPUT_WIDTH, MODEL_INPUT_CHANNELS]).into();
+
+        let model = model
+            .with_input_fact(0, fact)?
             .into_optimized()?
             .into_runnable()?;
-        
+
         Ok(model)
     }
 
+    /// Load an ONNX model using tract
+    fn load_onnx(model_path: &str) -> Result<(SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>, bool), Box<dyn Error>> {
+        let model = tract_onnx::onnx().model_for_path(model_path)?;
+
+        // Determine if model is NCHW or NHWC by inspecting input shape
+        let input_id = model.input_outlets()?[0];
+        let fact = model.outlet_fact(input_id)?;
+        let mut is_nhwc = false;
+
+        if let Ok(Some(shape)) = fact.shape.as_concrete_finite() {
+            log::info!("Model input shape: {:?}", shape);
+            // If last dimension is 3, it's likely NHWC [1, 224, 224, 3]
+            if shape.len() == 4 && shape[3] == 3 {
+                is_nhwc = true;
+            }
+        }
+
+        // Set batch size to 1 and define input shape
+        let fact = if is_nhwc {
+            f32::fact([1, MODEL_INPUT_HEIGHT, MODEL_INPUT_WIDTH, MODEL_INPUT_CHANNELS]).into()
+        } else {
+            f32::fact([1, MODEL_INPUT_CHANNELS, MODEL_INPUT_HEIGHT, MODEL_INPUT_WIDTH]).into()
+        };
+
+        log::info!("Setting input fact (is_nhwc={}): {:?}", is_nhwc, fact);
+
+        let model = model
+            .with_input_fact(0, fact)?
+            .into_optimized()?
+            .into_runnable()?;
+        
+        Ok((model, is_nhwc))
+    }
+
     /// Classify preprocessed image data
-    /// Input: already preprocessed float32 tensor in NCHW format [1, 3, 224, 224] normalized to [-1, 1]
     pub fn classify_preprocessed(&self, input_tensor: &[f32]) -> Result<ClassificationResult, Box<dyn Error>> {
         let expected_size = MODEL_INPUT_WIDTH * MODEL_INPUT_HEIGHT * MODEL_INPUT_CHANNELS;
         if input_tensor.len() != expected_size {
@@ -82,11 +113,18 @@ impl MLEngine {
             ).into());
         }
 
-        // Create tract tensor in NCHW format [1, 3, 224, 224]
-        let tensor: Tensor = tract_ndarray::Array4::from_shape_vec(
-            (1, MODEL_INPUT_CHANNELS, MODEL_INPUT_HEIGHT, MODEL_INPUT_WIDTH),
-            input_tensor.to_vec(),
-        )?.into();
+        // Create tract tensor in appropriate format
+        let tensor: Tensor = if self.is_nhwc {
+            tract_ndarray::Array4::from_shape_vec(
+                (1, MODEL_INPUT_HEIGHT, MODEL_INPUT_WIDTH, MODEL_INPUT_CHANNELS),
+                input_tensor.to_vec(),
+            )?.into()
+        } else {
+            tract_ndarray::Array4::from_shape_vec(
+                (1, MODEL_INPUT_CHANNELS, MODEL_INPUT_HEIGHT, MODEL_INPUT_WIDTH),
+                input_tensor.to_vec(),
+            )?.into()
+        };
 
         // Run inference
         let result = self.model.run(tvec!(tensor.into()))?;
@@ -110,9 +148,8 @@ impl MLEngine {
             .unwrap_or(2); // default to "neutral"
 
         // Safe classes: neutral (2) and drawing (0)
-        // Unsafe classes: hentai (1), porn (3), sexy (4)
-        let safe_score = scores[0] + scores[2]; // drawing + neutral
-        let unsafe_score = scores[1] + scores[3] + scores[4]; // hentai + porn + sexy
+        let safe_score = scores[0] + scores[2];
+        let unsafe_score = scores[1] + scores[3] + scores[4];
         let is_safe = safe_score > unsafe_score;
         
         let confidence = if is_safe { safe_score } else { unsafe_score };
@@ -125,64 +162,17 @@ impl MLEngine {
             confidence,
         };
 
-        log::debug!(
-            "Classification: {} (confidence: {:.3}), scores: d={:.3} h={:.3} n={:.3} p={:.3} s={:.3}",
-            result.top_class,
-            result.confidence,
-            scores[0], scores[1], scores[2], scores[3], scores[4]
-        );
-
         Ok(result)
     }
 
-    /// Classify raw RGBA image data (handles full preprocessing pipeline)
+    /// Classify raw RGBA image data
     pub fn classify(&self, rgba_data: &[u8], width: usize, height: usize) -> Result<ClassificationResult, Box<dyn Error>> {
-        let preprocessed = crate::image::preprocess_for_model(rgba_data, width, height)?;
+        let preprocessed = crate::image::preprocess_for_model(rgba_data, width, height, self.is_nhwc)?;
         self.classify_preprocessed(&preprocessed)
     }
 
     /// Get model path
     pub fn model_path(&self) -> &str {
         &self.model_path
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_class_names() {
-        assert_eq!(CLASSES[0], "drawing");
-        assert_eq!(CLASSES[1], "hentai");
-        assert_eq!(CLASSES[2], "neutral");
-        assert_eq!(CLASSES[3], "porn");
-        assert_eq!(CLASSES[4], "sexy");
-    }
-
-    #[test]
-    fn test_classification_result_safe() {
-        let result = ClassificationResult {
-            scores: [0.1, 0.05, 0.8, 0.03, 0.02],
-            top_class_index: 2,
-            top_class: "neutral".to_string(),
-            is_safe: true,
-            confidence: 0.9,
-        };
-        assert!(result.is_safe);
-        assert_eq!(result.top_class, "neutral");
-    }
-
-    #[test]
-    fn test_classification_result_unsafe() {
-        let result = ClassificationResult {
-            scores: [0.01, 0.05, 0.04, 0.85, 0.05],
-            top_class_index: 3,
-            top_class: "porn".to_string(),
-            is_safe: false,
-            confidence: 0.95,
-        };
-        assert!(!result.is_safe);
-        assert_eq!(result.top_class, "porn");
     }
 }

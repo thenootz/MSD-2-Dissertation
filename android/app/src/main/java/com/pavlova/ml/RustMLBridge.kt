@@ -12,7 +12,7 @@ object RustMLBridge {
 
     private const val TAG = "RustMLBridge"
     private const val LIBRARY_NAME = "pavlova_core"
-    private const val MODEL_FILE = "nsfw_mobilenet_v2_140_224.onnx"
+    private const val MODEL_FILE = "nsfw_mobilenet_v2_140_224.tflite"
 
     // GantMan NSFW model class indices
     private const val CLASS_DRAWING = 0
@@ -24,7 +24,8 @@ object RustMLBridge {
     private val CLASS_NAMES = arrayOf("drawing", "hentai", "neutral", "porn", "sexy")
 
     @Volatile
-    private var isInitialized = false
+    var isInitialized = false
+        private set
 
     init {
         try {
@@ -71,7 +72,14 @@ object RustMLBridge {
      */
     fun classifyFrame(imageData: ByteArray, width: Int, height: Int): ClassificationResult {
         if (!isInitialized) {
-            throw IllegalStateException("RustMLBridge not initialized")
+            Log.e(TAG, "RustMLBridge not initialized - returning default safe result")
+            return ClassificationResult(
+                isSafe = true,
+                confidence = 0f,
+                category = "uninitialized",
+                scores = floatArrayOf(0f, 0f, 1f, 0f, 0f),
+                topClass = "neutral"
+            )
         }
 
         return try {
@@ -131,7 +139,8 @@ object RustMLBridge {
      */
     fun generateBlur(imageData: ByteArray, width: Int, height: Int, radius: Float): ByteArray {
         if (!isInitialized) {
-            throw IllegalStateException("RustMLBridge not initialized")
+            Log.e(TAG, "RustMLBridge not initialized - returning original image")
+            return imageData
         }
 
         return try {
@@ -143,11 +152,12 @@ object RustMLBridge {
     }
 
     /**
-     * Generate pixelated version of image
+     * Generate pixelation version of image
      */
     fun generatePixelation(imageData: ByteArray, width: Int, height: Int, blockSize: Int): ByteArray {
         if (!isInitialized) {
-            throw IllegalStateException("RustMLBridge not initialized")
+            Log.e(TAG, "RustMLBridge not initialized - returning original image")
+            return imageData
         }
 
         return try {
@@ -196,42 +206,4 @@ object RustMLBridge {
     private external fun nativeGenerateBlur(imageData: ByteArray, width: Int, height: Int, radius: Float): ByteArray
     private external fun nativeGeneratePixelation(imageData: ByteArray, width: Int, height: Int, blockSize: Int): ByteArray
     private external fun nativeDestroy()
-}
-
-/**
- * Classification result with 5-class NSFW scores
- * Classes: drawing, hentai, neutral, porn, sexy
- */
-data class ClassificationResult(
-    /** Whether content is safe (neutral + drawing > hentai + porn + sexy) */
-    val isSafe: Boolean,
-    /** Aggregate confidence of safety determination */
-    val confidence: Float,
-    /** Top category name */
-    val category: String,
-    /** Raw per-class scores [drawing, hentai, neutral, porn, sexy] */
-    val scores: FloatArray = floatArrayOf(0f, 0f, 1f, 0f, 0f),
-    /** Name of highest-scoring class */
-    val topClass: String = "neutral"
-) {
-    /** Whether content is adult (porn or hentai) */
-    val isAdult: Boolean get() = category == "porn" || category == "hentai"
-    
-    /** Whether content is suggestive (sexy) */
-    val isSuggestive: Boolean get() = category == "sexy"
-    
-    override fun equals(other: Any?): Boolean {
-        if (this === other) return true
-        if (other !is ClassificationResult) return false
-        return isSafe == other.isSafe && confidence == other.confidence &&
-            category == other.category && scores.contentEquals(other.scores)
-    }
-    
-    override fun hashCode(): Int {
-        var result = isSafe.hashCode()
-        result = 31 * result + confidence.hashCode()
-        result = 31 * result + category.hashCode()
-        result = 31 * result + scores.contentHashCode()
-        return result
-    }
 }

@@ -1,7 +1,8 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
-    id("kotlin-kapt")
+    id("com.google.devtools.ksp")
+    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 android {
@@ -55,10 +56,6 @@ android {
         buildConfig = true
     }
 
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.4"
-    }
-
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -68,10 +65,19 @@ android {
         }
     }
 
-    // Specify where to find native libraries
     sourceSets {
         getByName("main") {
             jniLibs.srcDirs("src/main/jniLibs")
+        }
+    }
+}
+
+configurations.all {
+    resolutionStrategy {
+        eachDependency {
+            if (requested.group == "org.jetbrains.kotlinx" && requested.name == "kotlinx-metadata-jvm") {
+                useVersion("0.9.0") // Version that supports Kotlin 2.1 metadata
+            }
         }
     }
 }
@@ -97,24 +103,28 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
     // Room Database
-    val roomVersion = "2.6.1"
+    val roomVersion = "2.7.0-alpha11"
     implementation("androidx.room:room-runtime:$roomVersion")
     implementation("androidx.room:room-ktx:$roomVersion")
-    kapt("androidx.room:room-compiler:$roomVersion")
+    ksp("androidx.room:room-compiler:$roomVersion")
 
     // Security & Encryption
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("net.zetetic:android-database-sqlcipher:4.5.4")
 
     // TensorFlow Lite
-    implementation("org.tensorflow:tensorflow-lite:2.14.0")
-    implementation("org.tensorflow:tensorflow-lite-gpu:2.14.0")
+    // Note: Downgraded to 2.16.1 to avoid Duplicate Class issues with LiteRT in 2.17.0
+    // when used alongside tensorflow-lite-support.
+    val tfliteVersion = "2.16.1"
+    implementation("org.tensorflow:tensorflow-lite:$tfliteVersion")
+    implementation("org.tensorflow:tensorflow-lite-gpu:$tfliteVersion")
+    implementation("org.tensorflow:tensorflow-lite-gpu-api:$tfliteVersion")
     implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
 
     // Preferences DataStore
     implementation("androidx.datastore:datastore-preferences:1.0.0")
 
-    // WorkManager (for background tasks)
+    // WorkManager
     implementation("androidx.work:work-runtime-ktx:2.9.0")
 
     // Testing
@@ -125,43 +135,6 @@ dependencies {
     androidTestImplementation(platform("androidx.compose:compose-bom:2024.01.00"))
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     
-    // Debug
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
-
-// Task to build Rust library (run manually: ./gradlew buildRustLibrary)
-tasks.register<Exec>("buildRustLibrary") {
-    workingDir = file("../../rust")
-    
-    // Build for all ABIs
-    commandLine("cargo", "ndk",
-        "--target", "aarch64-linux-android",
-        "--target", "armv7-linux-androideabi", 
-        "--target", "x86_64-linux-android",
-        "--platform", "26",
-        "--", "build", "--release"
-    )
-}
-
-// Copy Rust libraries to jniLibs (run manually: ./gradlew copyRustLibs)
-tasks.register<Copy>("copyRustLibs") {
-    dependsOn("buildRustLibrary")
-    
-    from("../../rust/target/aarch64-linux-android/release/libpavlova_core.so") {
-        into("arm64-v8a")
-    }
-    from("../../rust/target/armv7-linux-androideabi/release/libpavlova_core.so") {
-        into("armeabi-v7a")
-    }
-    from("../../rust/target/x86_64-linux-android/release/libpavlova_core.so") {
-        into("x86_64")
-    }
-    
-    into("src/main/jniLibs")
-}
-
-// NOTE: The Rust build is NOT auto-triggered by Gradle.
-// Run build-rust.ps1 (Windows) or build-rust.sh (macOS/Linux) BEFORE
-// building the Android app. This avoids build failures when cargo-ndk
-// or the Android NDK toolchain is not configured.
