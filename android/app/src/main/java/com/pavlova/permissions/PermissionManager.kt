@@ -64,19 +64,7 @@ class PermissionManager(private val context: Context) {
             as MediaProjectionManager
         return projectionManager.createScreenCaptureIntent()
     }
-}
 
-    /**
-     * Open Notification Listener Settings
-     */
-    fun openNotificationListenerSettings(activity: Activity) {
-        val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
-        activity.startActivity(intent)
-    }
-
-    /**
-     * Check all required permissions
-     */
     fun hasAllRequiredPermissions(): Boolean {
         return hasOverlayPermission() && hasNotificationPermission()
     }

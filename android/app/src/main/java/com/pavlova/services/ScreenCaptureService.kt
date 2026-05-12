@@ -17,7 +17,7 @@ import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import com.pavlova.MainActivity
 import com.pavlova.R
-import com.pavlova.ml.FrameProcessor
+import com.pavlova.ml.FeedAnalyzer
 import kotlinx.coroutines.*
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -32,14 +32,14 @@ class ScreenCaptureService : Service() {
         const val EXTRA_RESULT_DATA = "result_data"
         
         private const val MAX_IMAGES = 2
-        private const val TARGET_FPS = 10
+        private const val TARGET_FPS = 2  // Lower rate for OCR-based analysis
         private const val FRAME_INTERVAL_MS = 1000L / TARGET_FPS
     }
 
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
-    private var frameProcessor: FrameProcessor? = null
+    private var feedAnalyzer: FeedAnalyzer? = null
     
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val isCapturing = AtomicBoolean(false)
@@ -55,7 +55,7 @@ class ScreenCaptureService : Service() {
         Log.d(TAG, "Service created")
         
         createNotificationChannel()
-        frameProcessor = FrameProcessor(this)
+        feedAnalyzer = FeedAnalyzer(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -141,6 +141,12 @@ class ScreenCaptureService : Service() {
             )
             
             isCapturing.set(true)
+            
+            // Start an auditing session
+            serviceScope.launch {
+                feedAnalyzer?.startSession()
+            }
+            
             Log.d(TAG, "Screen capture started successfully")
             
         } catch (e: Exception) {
@@ -161,15 +167,17 @@ class ScreenCaptureService : Service() {
         try {
             image = reader.acquireLatestImage()
             if (image != null) {
-                // Extract data synchronously while image is valid
-                val imageData = frameProcessor?.imageToByteArray(image) ?: return
+                val plane = image.planes[0]
+                val buffer = plane.buffer
+                val imageData = ByteArray(buffer.remaining())
+                buffer.get(imageData)
+                buffer.rewind()
                 val width = image.width
                 val height = image.height
                 
-                // Process frame asynchronously using extracted data
                 serviceScope.launch {
                     try {
-                        frameProcessor?.processFrame(imageData, width, height)
+                        feedAnalyzer?.processFrame(imageData, width, height)
                     } catch (e: Exception) {
                         Log.e(TAG, "Error processing frame", e)
                     }
@@ -208,6 +216,12 @@ class ScreenCaptureService : Service() {
     override fun onDestroy() {
         Log.d(TAG, "Service destroyed")
         
+        // End the auditing session
+        runBlocking {
+            feedAnalyzer?.endSession()
+        }
+        feedAnalyzer?.destroy()
+        
         stopCapture()
         
         serviceScope.cancel()
@@ -241,8 +255,8 @@ class ScreenCaptureService : Service() {
         )
         
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Pavlova Active")
-            .setContentText("Protecting your screen content")
+            .setContentTitle("Pavlova Auditing")
+            .setContentText("Analyzing feed recommendations")
             .setSmallIcon(R.drawable.ic_shield)
             .setContentIntent(pendingIntent)
             .setOngoing(true)

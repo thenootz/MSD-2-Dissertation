@@ -10,20 +10,26 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.pavlova.data.database.PavlovaDatabase
+import com.pavlova.data.model.FeedSession
+import com.pavlova.data.model.SessionMetrics
 import com.pavlova.permissions.PermissionManager
 import com.pavlova.services.ScreenCaptureService
 import com.pavlova.ui.theme.PavlovaTheme
+import kotlinx.coroutines.flow.map
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var permissionManager: PermissionManager
-    
+
     private var mediaProjectionResultCode: Int = Activity.RESULT_CANCELED
     private var mediaProjectionResultData: Intent? = null
 
@@ -33,22 +39,13 @@ class MainActivity : ComponentActivity() {
         if (result.resultCode == Activity.RESULT_OK) {
             mediaProjectionResultCode = result.resultCode
             mediaProjectionResultData = result.data
-            Log.d(TAG, "MediaProjection permission granted")
             startScreenCaptureService()
-        } else {
-            Log.w(TAG, "MediaProjection permission denied")
         }
     }
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            Log.d(TAG, "Notification permission granted")
-        } else {
-            Log.w(TAG, "Notification permission denied")
-        }
-    }
+    ) { /* no-op — will re-check on next action */ }
 
     companion object {
         private const val TAG = "MainActivity"
@@ -56,19 +53,20 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
         permissionManager = PermissionManager(this)
-        
+        val db = PavlovaDatabase.getDatabase(this)
+
         setContent {
             PavlovaTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    MainScreen(
-                        onStartProtection = { requestPermissionsAndStart() },
-                        onStopProtection = { stopScreenCaptureService() },
-                        permissionManager = permissionManager
+                    DashboardScreen(
+                        onStartAudit = { requestPermissionsAndStart() },
+                        onStopAudit = { stopScreenCaptureService() },
+                        permissionManager = permissionManager,
+                        db = db
                     )
                 }
             }
@@ -76,23 +74,16 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestPermissionsAndStart() {
-        // Check notification permission (Android 13+)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (!permissionManager.hasNotificationPermission()) {
-                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                return
-            }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            !permissionManager.hasNotificationPermission()) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            return
         }
-        
-        // Check overlay permission
         if (!permissionManager.hasOverlayPermission()) {
             permissionManager.requestOverlayPermission(this)
             return
         }
-        
-        // Request MediaProjection
-        val intent = permissionManager.getMediaProjectionIntent()
-        mediaProjectionLauncher.launch(intent)
+        mediaProjectionLauncher.launch(permissionManager.getMediaProjectionIntent())
     }
 
     private fun startScreenCaptureService() {
@@ -100,172 +91,219 @@ class MainActivity : ComponentActivity() {
             putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, mediaProjectionResultCode)
             putExtra(ScreenCaptureService.EXTRA_RESULT_DATA, mediaProjectionResultData)
         }
-        
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(intent)
         } else {
             startService(intent)
         }
-        
-        Log.d(TAG, "Screen capture service started")
+        Log.d(TAG, "Audit service started")
     }
 
     private fun stopScreenCaptureService() {
-        val intent = Intent(this, ScreenCaptureService::class.java)
-        stopService(intent)
-        Log.d(TAG, "Screen capture service stopped")
+        stopService(Intent(this, ScreenCaptureService::class.java))
+        Log.d(TAG, "Audit service stopped")
     }
 }
 
 @Composable
-fun MainScreen(
-    onStartProtection: () -> Unit,
-    onStopProtection: () -> Unit,
-    permissionManager: PermissionManager
+fun DashboardScreen(
+    onStartAudit: () -> Unit,
+    onStopAudit: () -> Unit,
+    permissionManager: PermissionManager,
+    db: PavlovaDatabase
 ) {
-    var isProtectionActive by remember { mutableStateOf(false) }
-    val context = LocalContext.current
+    var isAuditing by remember { mutableStateOf(false) }
 
-    Column(
+    val sessions by db.feedSessionDao().getAllSessions()
+        .collectAsState(initial = emptyList())
+    val recentMetrics by db.sessionMetricsDao().getRecentMetrics(10)
+        .collectAsState(initial = emptyList())
+
+    LazyColumn(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text(
-            text = "Pavlova",
-            style = MaterialTheme.typography.headlineLarge,
-            color = MaterialTheme.colorScheme.primary
-        )
-        
-        Spacer(modifier = Modifier.height(8.dp))
-        
-        Text(
-            text = "Privacy-First Screen Protection",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        
-        Spacer(modifier = Modifier.height(32.dp))
-        
-        // Status Card
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp)
+        // Header
+        item {
+            Text(
+                text = "Pavlova",
+                style = MaterialTheme.typography.headlineLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Text(
+                text = "Feed Recommendation Auditor",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
+        // Audit Control
+        item {
+            Button(
+                onClick = {
+                    if (isAuditing) { onStopAudit(); isAuditing = false }
+                    else { onStartAudit(); isAuditing = true }
+                },
+                modifier = Modifier.fillMaxWidth().height(56.dp),
+                colors = if (isAuditing) ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error
+                ) else ButtonDefaults.buttonColors()
             ) {
                 Text(
-                    text = "Status",
+                    text = if (isAuditing) "Stop Auditing" else "Start Feed Audit",
                     style = MaterialTheme.typography.titleMedium
                 )
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(12.dp)
-                            .padding(end = 8.dp)
-                    ) {
-                        Surface(
-                            color = if (isProtectionActive) 
-                                MaterialTheme.colorScheme.primary 
-                            else 
-                                MaterialTheme.colorScheme.surfaceVariant,
-                            shape = MaterialTheme.shapes.small
-                        ) {}
-                    }
-                    Text(
-                        text = if (isProtectionActive) "Active" else "Inactive",
-                        style = MaterialTheme.typography.bodyLarge
-                    )
+            }
+        }
+
+        // Permission Status
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Permissions", style = MaterialTheme.typography.titleSmall)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    PermissionRow("Overlay", permissionManager.hasOverlayPermission())
+                    PermissionRow("Notifications", permissionManager.hasNotificationPermission())
                 }
             }
         }
-        
-        Spacer(modifier = Modifier.height(24.dp))
-        
-        // Main Action Button
-        Button(
-            onClick = {
-                if (isProtectionActive) {
-                    onStopProtection()
-                    isProtectionActive = false
-                } else {
-                    onStartProtection()
-                    isProtectionActive = true
-                }
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-                .height(56.dp)
-        ) {
-            Text(
-                text = if (isProtectionActive) "Stop Protection" else "Start Protection",
-                style = MaterialTheme.typography.titleMedium
-            )
+
+        // Latest Metrics Summary
+        if (recentMetrics.isNotEmpty()) {
+            item {
+                Text(
+                    "Latest Analysis",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            item {
+                val latest = recentMetrics.first()
+                MetricsCard(latest)
+            }
         }
-        
-        Spacer(modifier = Modifier.height(16.dp))
-        
-        // Permission Status
-        PermissionStatusSection(permissionManager)
+
+        // Session History
+        if (sessions.isNotEmpty()) {
+            item {
+                Text(
+                    "Session History (${sessions.size})",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            items(sessions.take(20)) { session ->
+                val metrics = recentMetrics.find { it.sessionId == session.id }
+                SessionCard(session, metrics)
+            }
+        }
     }
 }
 
 @Composable
-fun PermissionStatusSection(permissionManager: PermissionManager) {
-    val context = LocalContext.current
-    
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(16.dp)
+fun MetricsCard(metrics: SessionMetrics) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = when {
+                metrics.manipulationScore > 0.7f -> MaterialTheme.colorScheme.errorContainer
+                metrics.manipulationScore > 0.4f -> MaterialTheme.colorScheme.tertiaryContainer
+                else -> MaterialTheme.colorScheme.surfaceVariant
+            }
+        )
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text("Manipulation Risk", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "${(metrics.manipulationScore * 100).toInt()}%",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            LinearProgressIndicator(
+                progress = { metrics.manipulationScore },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                MetricChip("Topics: ${metrics.uniqueTopics}")
+                MetricChip("Creators: ${metrics.uniqueCreators}")
+                MetricChip("Entropy: ${"%.2f".format(metrics.topicEntropy)}")
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                MetricChip("Sentiment: ${"%.2f".format(metrics.avgSentiment)}")
+                MetricChip("Toxicity: ${"%.2f".format(metrics.avgToxicity)}")
+                MetricChip("Escalation: ${"%.2f".format(metrics.emotionalEscalation)}")
+            }
+        }
+    }
+}
+
+@Composable
+fun MetricChip(text: String) {
+    Surface(
+        shape = MaterialTheme.shapes.small,
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 2.dp
     ) {
         Text(
-            text = "Permissions",
-            style = MaterialTheme.typography.titleMedium
-        )
-        
-        Spacer(modifier = Modifier.height(8.dp))
-        
-        PermissionItem(
-            name = "Overlay",
-            isGranted = permissionManager.hasOverlayPermission()
-        )
-        
-        PermissionItem(
-            name = "Notification",
-            isGranted = permissionManager.hasNotificationPermission()
+            text = text,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            style = MaterialTheme.typography.labelSmall
         )
     }
 }
 
 @Composable
-fun PermissionItem(name: String, isGranted: Boolean) {
+fun SessionCard(session: FeedSession, metrics: SessionMetrics?) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(session.platform.uppercase(), style = MaterialTheme.typography.labelMedium)
+                Text(
+                    "${session.totalItems} items",
+                    style = MaterialTheme.typography.labelMedium
+                )
+            }
+            if (metrics != null) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    "Risk: ${(metrics.manipulationScore * 100).toInt()}% | " +
+                    "Topics: ${metrics.uniqueTopics} | " +
+                    "Sentiment: ${"%.2f".format(metrics.avgSentiment)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun PermissionRow(name: String, isGranted: Boolean) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
     ) {
+        Text(name, style = MaterialTheme.typography.bodyMedium)
         Text(
-            text = name,
-            style = MaterialTheme.typography.bodyMedium
-        )
-        Text(
-            text = if (isGranted) "✓ Granted" else "✗ Required",
-            style = MaterialTheme.typography.bodyMedium,
-            color = if (isGranted) 
-                MaterialTheme.colorScheme.primary 
-            else 
-                MaterialTheme.colorScheme.error
+            if (isGranted) "✓" else "✗",
+            color = if (isGranted) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.error
         )
     }
 }

@@ -1,23 +1,21 @@
-# Pavlova 🛡️
+# Pavlova
 
-**On-Device Screen-Safety System for Android**
+**Explainable AI Framework for Auditing Social Media Recommendation Systems**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Android](https://img.shields.io/badge/Platform-Android%208.0%2B-green.svg)](https://developer.android.com)
-[![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
 [![Master's Thesis](https://img.shields.io/badge/Type-Master's%20Thesis-purple.svg)](#)
 
 ---
 
 ## Overview
 
-Pavlova is a privacy-preserving Android application that provides **real-time content filtering** through on-device machine learning. The app captures screen frames, classifies content as safe or unsafe, and applies selective blur or pixelation overlays when inappropriate content is detected—all while maintaining strict privacy guarantees through local processing.
+Pavlova is an on-device Android tool for **auditing social media recommendation algorithms** for behavioral manipulation and content steering. It captures feed sessions (e.g. TikTok), extracts text via OCR, classifies content through NLP, and computes drift/manipulation metrics — all locally, with no data leaving the device.
 
-**🎓 Academic Context**: This is a Master's thesis prototype demonstrating practical implementation of privacy-preserving mobile ML for digital safety applications.
+**Dissertation framing**: *"Detection of Behavioral and Ideological Steering in Short-Video Recommendation Platforms Using Explainable Machine Learning"*
 
 ---
 
-## ✨ Key Features
+## Key Features
 
 - **🔒 Privacy-First**: All processing happens on-device, no cloud, no screenshots stored
 - **⚡ Real-Time**: < 100ms end-to-end latency on mid-range devices

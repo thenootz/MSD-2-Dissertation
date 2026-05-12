@@ -99,14 +99,13 @@ dependencies {
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("net.zetetic:android-database-sqlcipher:4.5.4")
 
-    // TensorFlow Lite
-    // Note: Downgraded to 2.16.1 to avoid Duplicate Class issues with LiteRT in 2.17.0
-    // when used alongside tensorflow-lite-support.
+    // TensorFlow Lite (for future Phase 2 NLP models — MobileBERT, toxicity)
     val tfliteVersion = "2.16.1"
     implementation("org.tensorflow:tensorflow-lite:$tfliteVersion")
-    implementation("org.tensorflow:tensorflow-lite-gpu:$tfliteVersion")
-    implementation("org.tensorflow:tensorflow-lite-gpu-api:$tfliteVersion")
     implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
+
+    // Google ML Kit — On-device OCR
+    implementation("com.google.mlkit:text-recognition:16.0.1")
 
     // Preferences DataStore
     implementation("androidx.datastore:datastore-preferences:1.0.0")

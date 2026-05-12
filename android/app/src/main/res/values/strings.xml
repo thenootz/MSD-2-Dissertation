@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Pavlova</string>
-    <string name="app_description">Privacy-First Screen Protection</string>
+    <string name="app_description">Feed Recommendation Auditor</string>
     
     <!-- Main Screen -->
     <string name="start_protection">Start Protection</string>
