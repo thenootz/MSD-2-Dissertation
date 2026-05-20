@@ -230,7 +230,7 @@ fun MetricsCard(metrics: SessionMetrics) {
             }
             Spacer(modifier = Modifier.height(8.dp))
             LinearProgressIndicator(
-                progress = { metrics.manipulationScore },
+                progress = metrics.manipulationScore,
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(modifier = Modifier.height(12.dp))
