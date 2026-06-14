@@ -35,8 +35,11 @@ data class ContentItem(
     /** OCR-extracted text (captions, hashtags, overlays) */
     val textContent: String? = null,
 
-    /** Hashed creator identifier (privacy-preserving) */
+    /** Creator handle extracted from an on-screen @mention (without the '@') */
     val creatorId: String? = null,
+
+    /** Absolute path to a downscaled JPEG thumbnail of this frame, if saved */
+    val screenshotPath: String? = null,
 
     // --- NLP Scores (filled by analysis pipeline) ---
 

@@ -156,25 +156,49 @@ class ScreenCaptureService : Service() {
     }
 
     private fun handleNewFrame(reader: ImageReader) {
-        // Rate limiting
-        val currentTime = System.currentTimeMillis()
-        if (currentTime - lastFrameTime < FRAME_INTERVAL_MS) {
-            return
-        }
-        lastFrameTime = currentTime
-        
         var image: android.media.Image? = null
         try {
+            // Always acquire (and close in finally) so the ImageReader's buffer queue
+            // keeps draining. If we rate-limit before acquiring, unacquired buffers
+            // pile up (MAX_IMAGES) and the virtual display stalls — no further
+            // onImageAvailable callbacks ever fire, so only the first frame is ever
+            // processed for the whole session.
             image = reader.acquireLatestImage()
             if (image != null) {
+                // Rate limiting
+                val currentTime = System.currentTimeMillis()
+                if (currentTime - lastFrameTime < FRAME_INTERVAL_MS) {
+                    return
+                }
+                lastFrameTime = currentTime
+
                 val plane = image.planes[0]
                 val buffer = plane.buffer
-                val imageData = ByteArray(buffer.remaining())
-                buffer.get(imageData)
-                buffer.rewind()
+                val pixelStride = plane.pixelStride
+                val rowStride = plane.rowStride
                 val width = image.width
                 val height = image.height
-                
+
+                // ImageReader rows are often padded to a row stride wider than
+                // width * pixelStride. Strip that padding so the byte array is a
+                // tightly-packed RGBA buffer matching width x height, otherwise
+                // Bitmap.copyPixelsFromBuffer skews every row and OCR finds nothing.
+                val imageData: ByteArray
+                if (rowStride == pixelStride * width) {
+                    imageData = ByteArray(buffer.remaining())
+                    buffer.get(imageData)
+                } else {
+                    val rowBytes = pixelStride * width
+                    imageData = ByteArray(rowBytes * height)
+                    val rowBuffer = ByteArray(rowStride)
+                    for (row in 0 until height) {
+                        buffer.position(row * rowStride)
+                        buffer.get(rowBuffer, 0, minOf(rowStride, buffer.remaining()))
+                        System.arraycopy(rowBuffer, 0, imageData, row * rowBytes, rowBytes)
+                    }
+                }
+                buffer.rewind()
+
                 serviceScope.launch {
                     try {
                         feedAnalyzer?.processFrame(imageData, width, height)

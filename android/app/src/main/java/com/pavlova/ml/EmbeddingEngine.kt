@@ -57,7 +57,11 @@ class EmbeddingEngine(private val context: Context) {
      * Uses TFLite model if available, otherwise hash-based fallback.
      */
     fun embed(text: String): FloatArray {
-        return if (isModelLoaded) embedWithModel(text) else hashEmbed(text)
+        return if (isModelLoaded) {
+            embedWithModel(text) ?: hashEmbed(text)
+        } else {
+            hashEmbed(text)
+        }
     }
 
     /**
@@ -131,7 +135,7 @@ class EmbeddingEngine(private val context: Context) {
 
     // --- TFLite model path ---
 
-    private fun embedWithModel(text: String): FloatArray {
+    private fun embedWithModel(text: String): FloatArray? {
         val tokens = tokenize(text)
         val input = ByteBuffer.allocateDirect(MAX_SEQ_LEN * 4).apply {
             order(ByteOrder.nativeOrder())
@@ -141,7 +145,16 @@ class EmbeddingEngine(private val context: Context) {
         val output = ByteBuffer.allocateDirect(EMBEDDING_DIM * 4).apply {
             order(ByteOrder.nativeOrder())
         }
-        interpreter?.run(input, output)
+        try {
+            interpreter?.run(input, output)
+        } catch (e: Exception) {
+            // Same hash-tokenizer out-of-vocab issue as NlpModelRunner: disable the
+            // model and fall back to the hash embedding instead of crashing the
+            // whole frame analysis.
+            Log.w(TAG, "SBERT model inference failed — disabling, will use hash embedding fallback", e)
+            close()
+            return null
+        }
         output.rewind()
         return FloatArray(EMBEDDING_DIM) { output.float }.also { normalize(it) }
     }

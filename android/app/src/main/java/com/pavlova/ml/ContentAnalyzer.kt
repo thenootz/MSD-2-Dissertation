@@ -1,6 +1,7 @@
 package com.pavlova.ml
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.util.Log
 
 /**
@@ -64,9 +65,9 @@ object ContentAnalyzer {
     /**
      * Analyze a captured frame: OCR → NLP pipeline → ContentAnalysis
      */
-    suspend fun analyze(imageData: ByteArray, width: Int, height: Int): ContentAnalysis {
+    suspend fun analyze(bitmap: Bitmap): ContentAnalysis {
         val startTime = System.currentTimeMillis()
-        val text = TextExtractor.extractText(imageData, width, height)
+        val text = TextExtractor.extractText(bitmap)
         if (text.isBlank()) {
             return ContentAnalysis(processingTimeMs = System.currentTimeMillis() - startTime)
         }
@@ -192,6 +193,6 @@ object ContentAnalyzer {
     private fun extractCreatorId(text: String): String? {
         val mentionPattern = Regex("@([\\w.]+)")
         val match = mentionPattern.find(text)
-        return match?.groupValues?.get(1)?.hashCode()?.toString()
+        return match?.groupValues?.get(1)
     }
 }

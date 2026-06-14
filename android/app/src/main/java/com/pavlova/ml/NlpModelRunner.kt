@@ -77,7 +77,17 @@ class NlpModelRunner(
             order(ByteOrder.nativeOrder())
         }
 
-        interp.run(inputBuffer, outputBuffer)
+        try {
+            interp.run(inputBuffer, outputBuffer)
+        } catch (e: Exception) {
+            // The placeholder hash-based tokenizer can produce token IDs outside the
+            // model's embedding vocab range, which crashes the GATHER op. Disable this
+            // runner so callers fall back to the keyword heuristic instead of crashing
+            // FeedAnalyzer.processFrame for every subsequent frame.
+            Log.w(TAG, "NLP model inference failed for $modelFileName — disabling, will use heuristic fallback", e)
+            close()
+            return FloatArray(numClasses)
+        }
         outputBuffer.rewind()
 
         val logits = FloatArray(numClasses) { outputBuffer.float }

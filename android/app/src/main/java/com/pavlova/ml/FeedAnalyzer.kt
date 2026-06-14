@@ -1,10 +1,10 @@
 package com.pavlova.ml
 
 import android.content.Context
-import android.graphics.Bitmap
 import android.media.Image
 import android.util.Log
 import com.pavlova.analysis.ManipulationDetector
+import com.pavlova.data.ScreenshotStore
 import com.pavlova.data.dao.ContentItemDao
 import com.pavlova.data.dao.FeedSessionDao
 import com.pavlova.data.dao.SessionMetricsDao
@@ -12,7 +12,6 @@ import com.pavlova.data.database.PavlovaDatabase
 import com.pavlova.data.model.ContentItem
 import com.pavlova.data.model.FeedSession
 import kotlinx.coroutines.*
-import java.nio.ByteBuffer
 
 /**
  * Orchestrates the feed auditing pipeline:
@@ -81,9 +80,10 @@ class FeedAnalyzer(context: Context) {
         if (frameHash == lastFrameHash) return@withContext
         lastFrameHash = frameHash
 
+        val bitmap = TextExtractor.bitmapFromRgba(imageData, width, height)
         try {
             // Run content analysis pipeline
-            val analysis = ContentAnalyzer.analyze(imageData, width, height)
+            val analysis = ContentAnalyzer.analyze(bitmap)
 
             // Skip frames with no text content (transitions, loading screens)
             if (analysis.extractedText.isBlank()) return@withContext
@@ -100,7 +100,13 @@ class FeedAnalyzer(context: Context) {
                 toxicityScore = analysis.toxicityScore,
                 persuasionScore = analysis.persuasionScore
             )
-            contentDao.insert(item)
+            val rowId = contentDao.insert(item)
+
+            // Save a downscaled thumbnail of this frame, linked to the stored item
+            val screenshotPath = ScreenshotStore.save(session.id, rowId, bitmap)
+            if (screenshotPath != null) {
+                contentDao.update(item.copy(id = rowId, screenshotPath = screenshotPath))
+            }
 
             Log.d(TAG, "Item #$itemPosition: topics=${analysis.topics}, " +
                     "sentiment=${analysis.sentimentScore}, ${analysis.processingTimeMs}ms")
@@ -112,6 +118,8 @@ class FeedAnalyzer(context: Context) {
 
         } catch (e: Exception) {
             Log.e(TAG, "Error processing frame", e)
+        } finally {
+            bitmap.recycle()
         }
     }
 

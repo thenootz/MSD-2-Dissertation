@@ -21,12 +21,12 @@ object TextExtractor {
     private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
 
     /**
-     * Extract text from a raw RGBA byte array frame.
+     * Build a Bitmap from a raw RGBA byte array frame.
      */
-    suspend fun extractText(imageData: ByteArray, width: Int, height: Int): String {
+    fun bitmapFromRgba(imageData: ByteArray, width: Int, height: Int): Bitmap {
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(imageData))
-        return extractText(bitmap)
+        return bitmap
     }
 
     /**

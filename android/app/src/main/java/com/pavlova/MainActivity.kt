@@ -9,6 +9,7 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -18,11 +19,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import com.pavlova.analysis.ShapExplainer
 import com.pavlova.data.database.PavlovaDatabase
 import com.pavlova.data.model.FeedSession
 import com.pavlova.data.model.SessionMetrics
 import com.pavlova.permissions.PermissionManager
 import com.pavlova.services.ScreenCaptureService
+import com.pavlova.ui.SessionDetailScreen
+import com.pavlova.ui.components.MetricChip
 import com.pavlova.ui.theme.PavlovaTheme
 import kotlinx.coroutines.flow.map
 
@@ -62,12 +69,26 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    DashboardScreen(
-                        onStartAudit = { requestPermissionsAndStart() },
-                        onStopAudit = { stopScreenCaptureService() },
-                        permissionManager = permissionManager,
-                        db = db
-                    )
+                    val navController = rememberNavController()
+                    NavHost(navController = navController, startDestination = "dashboard") {
+                        composable("dashboard") {
+                            DashboardScreen(
+                                onStartAudit = { requestPermissionsAndStart() },
+                                onStopAudit = { stopScreenCaptureService() },
+                                onOpenSession = { id -> navController.navigate("session/$id") },
+                                permissionManager = permissionManager,
+                                db = db
+                            )
+                        }
+                        composable("session/{sessionId}") { backStackEntry ->
+                            val sessionId = backStackEntry.arguments?.getString("sessionId").orEmpty()
+                            SessionDetailScreen(
+                                sessionId = sessionId,
+                                db = db,
+                                onBack = { navController.popBackStack() }
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -109,6 +130,7 @@ class MainActivity : ComponentActivity() {
 fun DashboardScreen(
     onStartAudit: () -> Unit,
     onStopAudit: () -> Unit,
+    onOpenSession: (String) -> Unit,
     permissionManager: PermissionManager,
     db: PavlovaDatabase
 ) {
@@ -198,7 +220,7 @@ fun DashboardScreen(
             }
             items(sessions.take(20)) { session ->
                 val metrics = recentMetrics.find { it.sessionId == session.id }
-                SessionCard(session, metrics)
+                SessionCard(session, metrics, onClick = { onOpenSession(session.id) })
             }
         }
     }
@@ -246,28 +268,23 @@ fun MetricsCard(metrics: SessionMetrics) {
                 MetricChip("Toxicity: ${"%.2f".format(metrics.avgToxicity)}")
                 MetricChip("Escalation: ${"%.2f".format(metrics.emotionalEscalation)}")
             }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                ShapExplainer.generateSummary(metrics),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
 
 @Composable
-fun MetricChip(text: String) {
-    Surface(
-        shape = MaterialTheme.shapes.small,
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 2.dp
+fun SessionCard(session: FeedSession, metrics: SessionMetrics?, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
     ) {
-        Text(
-            text = text,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-            style = MaterialTheme.typography.labelSmall
-        )
-    }
-}
-
-@Composable
-fun SessionCard(session: FeedSession, metrics: SessionMetrics?) {
-    Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -289,6 +306,13 @@ fun SessionCard(session: FeedSession, metrics: SessionMetrics?) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                "View details →",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.align(Alignment.End)
+            )
         }
     }
 }

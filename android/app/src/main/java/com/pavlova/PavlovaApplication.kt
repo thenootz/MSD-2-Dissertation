@@ -3,6 +3,7 @@ package com.pavlova
 import android.app.Application
 import android.util.Log
 import com.pavlova.analysis.ManipulationDetector
+import com.pavlova.data.ScreenshotStore
 import com.pavlova.ml.ContentAnalyzer
 
 class PavlovaApplication : Application() {
@@ -17,6 +18,9 @@ class PavlovaApplication : Application() {
         super.onCreate()
         instance = this
         Log.d(TAG, "Pavlova application starting...")
+
+        // Initialize per-item screenshot thumbnail storage
+        ScreenshotStore.initialize(this)
 
         // Initialize NLP models (RoBERTa, SBERT — loads from assets, falls back to heuristics)
         ContentAnalyzer.initialize(this)

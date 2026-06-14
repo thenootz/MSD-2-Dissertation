@@ -23,7 +23,7 @@ data class ContentAnalysis(
     /** Persuasion/manipulation language score: 0.0 to 1.0 */
     val persuasionScore: Float = 0f,
 
-    /** Hashed creator identifier extracted from UI */
+    /** Creator handle extracted from an on-screen @mention (without the '@') */
     val creatorId: String? = null,
 
     /** SBERT embedding vector for semantic clustering */

@@ -16,6 +16,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.pavlova.debug.DebugCapture
 import com.pavlova.debug.DebugCaptureStore
+import com.pavlova.ui.components.ThumbnailImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -129,28 +130,6 @@ private fun CaptureRow(capture: DebugCapture, onClick: () -> Unit) {
             }
             TextButton(onClick = onClick) { Text("View") }
         }
-    }
-}
-
-@Composable
-private fun ThumbnailImage(path: String, sizeDp: Int) {
-    val bitmap = remember(path) {
-        runCatching {
-            val opts = BitmapFactory.Options().apply { inSampleSize = 4 }
-            BitmapFactory.decodeFile(path, opts)
-        }.getOrNull()
-    }
-    if (bitmap != null) {
-        Image(
-            bitmap = bitmap.asImageBitmap(),
-            contentDescription = null,
-            modifier = Modifier.size(sizeDp.dp)
-        )
-    } else {
-        Box(
-            modifier = Modifier.size(sizeDp.dp),
-            contentAlignment = androidx.compose.ui.Alignment.Center
-        ) { Text("?") }
     }
 }
 

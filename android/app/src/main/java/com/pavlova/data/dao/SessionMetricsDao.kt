@@ -10,6 +10,9 @@ interface SessionMetricsDao {
     @Query("SELECT * FROM session_metrics WHERE sessionId = :sessionId ORDER BY computedAt DESC LIMIT 1")
     suspend fun getMetrics(sessionId: String): SessionMetrics?
 
+    @Query("SELECT * FROM session_metrics WHERE sessionId = :sessionId ORDER BY computedAt DESC LIMIT 1")
+    fun getLatestMetricsForSession(sessionId: String): Flow<SessionMetrics?>
+
     @Query("SELECT * FROM session_metrics ORDER BY computedAt DESC")
     fun getAllMetrics(): Flow<List<SessionMetrics>>
 
