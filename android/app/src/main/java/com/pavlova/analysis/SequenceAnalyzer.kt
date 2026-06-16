@@ -103,7 +103,16 @@ class SequenceAnalyzer(private val context: Context) {
             order(ByteOrder.nativeOrder())
         }
 
-        interp.run(input, output)
+        try {
+            interp.run(input, output)
+        } catch (e: Exception) {
+            // Mirror the NlpModelRunner / EmbeddingEngine safety net: if a real
+            // LSTM is later shipped and inference throws (shape mismatch,
+            // unsupported op, etc.), don't crash ManipulationDetector — fall
+            // back to the deterministic statistical analyser.
+            Log.w(TAG, "LSTM model inference failed — falling back to statistical analyser", e)
+            return analyzeWithStatistics(features)
+        }
         output.rewind()
 
         val escalationScore = output.float.coerceIn(0f, 1f)

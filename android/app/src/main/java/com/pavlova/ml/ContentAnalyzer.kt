@@ -118,6 +118,10 @@ object ContentAnalyzer {
         )
     }
 
+    /** Exposed for reuse by [com.pavlova.analysis.ManipulationDetector] so the SBERT TFLite model
+     *  isn't loaded twice into memory. Null before [initialize] is called. */
+    fun embeddingEngine(): EmbeddingEngine? = embeddingEngine
+
     fun destroy() {
         sentimentRunner?.close()
         toxicityRunner?.close()

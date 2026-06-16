@@ -19,16 +19,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.pavlova.analysis.ShapExplainer
+import com.pavlova.data.AppSettings
 import com.pavlova.data.database.PavlovaDatabase
 import com.pavlova.data.model.FeedSession
 import com.pavlova.data.model.SessionMetrics
 import com.pavlova.permissions.PermissionManager
 import com.pavlova.services.ScreenCaptureService
+import com.pavlova.ui.DebugCapturesScreen
 import com.pavlova.ui.SessionDetailScreen
+import com.pavlova.ui.SettingsScreen
 import com.pavlova.ui.components.MetricChip
 import com.pavlova.ui.theme.PavlovaTheme
 import kotlinx.coroutines.flow.map
@@ -60,6 +64,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Default on Android 15 (SDK 35) is edge-to-edge with no inset
+        // handling. Explicitly opt-in here for clarity, then let each screen
+        // consume WindowInsets.safeDrawing so content (incl. the dashboard
+        // header) clears the status bar and gesture nav area.
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         permissionManager = PermissionManager(this)
         val db = PavlovaDatabase.getDatabase(this)
 
@@ -76,6 +85,7 @@ class MainActivity : ComponentActivity() {
                                 onStartAudit = { requestPermissionsAndStart() },
                                 onStopAudit = { stopScreenCaptureService() },
                                 onOpenSession = { id -> navController.navigate("session/$id") },
+                                onOpenSettings = { navController.navigate("settings") },
                                 permissionManager = permissionManager,
                                 db = db
                             )
@@ -87,6 +97,15 @@ class MainActivity : ComponentActivity() {
                                 db = db,
                                 onBack = { navController.popBackStack() }
                             )
+                        }
+                        composable("settings") {
+                            SettingsScreen(
+                                onBack = { navController.popBackStack() },
+                                onOpenDebugCaptures = { navController.navigate("debug") }
+                            )
+                        }
+                        composable("debug") {
+                            DebugCapturesScreen(onBack = { navController.popBackStack() })
                         }
                     }
                 }
@@ -100,10 +119,10 @@ class MainActivity : ComponentActivity() {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             return
         }
-        if (!permissionManager.hasOverlayPermission()) {
-            permissionManager.requestOverlayPermission(this)
-            return
-        }
+        // Note: SYSTEM_ALERT_WINDOW (overlay) permission is intentionally NOT
+        // requested here — the active auditing pipeline never draws an
+        // overlay. OverlayManager remains in the codebase for a future
+        // annotation-overlay feature.
         mediaProjectionLauncher.launch(permissionManager.getMediaProjectionIntent())
     }
 
@@ -131,10 +150,12 @@ fun DashboardScreen(
     onStartAudit: () -> Unit,
     onStopAudit: () -> Unit,
     onOpenSession: (String) -> Unit,
+    onOpenSettings: () -> Unit,
     permissionManager: PermissionManager,
     db: PavlovaDatabase
 ) {
     var isAuditing by remember { mutableStateOf(false) }
+    val verboseMode by AppSettings.verboseModeFlow.collectAsState()
 
     val sessions by db.feedSessionDao().getAllSessions()
         .collectAsState(initial = emptyList())
@@ -144,22 +165,32 @@ fun DashboardScreen(
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.safeDrawing)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         // Header
         item {
-            Text(
-                text = "Pavlova",
-                style = MaterialTheme.typography.headlineLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
-            )
-            Text(
-                text = "Feed Recommendation Auditor",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Pavlova",
+                        style = MaterialTheme.typography.headlineLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "Feed Recommendation Auditor",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                TextButton(onClick = onOpenSettings) { Text("Settings") }
+            }
             Spacer(modifier = Modifier.height(8.dp))
         }
 
@@ -188,8 +219,13 @@ fun DashboardScreen(
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text("Permissions", style = MaterialTheme.typography.titleSmall)
                     Spacer(modifier = Modifier.height(4.dp))
-                    PermissionRow("Overlay", permissionManager.hasOverlayPermission())
                     PermissionRow("Notifications", permissionManager.hasNotificationPermission())
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "Verbose / demo mode: ${if (verboseMode) "ON" else "OFF"}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }

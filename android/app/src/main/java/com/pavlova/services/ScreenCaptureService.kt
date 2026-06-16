@@ -257,10 +257,10 @@ class ScreenCaptureService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "Screen Protection",
+                "Feed Audit",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Active screen content filtering"
+                description = "Auditing social media feed recommendations"
                 setShowBadge(false)
             }
             

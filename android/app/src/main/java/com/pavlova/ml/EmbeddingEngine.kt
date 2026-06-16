@@ -35,6 +35,7 @@ class EmbeddingEngine(private val context: Context) {
     }
 
     private var interpreter: Interpreter? = null
+    private var tokenizer: Tokenizer = HashTokenizer(32_000)
     val isModelLoaded: Boolean get() = interpreter != null
 
     fun load(): Boolean {
@@ -44,7 +45,8 @@ class EmbeddingEngine(private val context: Context) {
                 setNumThreads(2)
                 setUseXNNPACK(true)
             })
-            Log.d(TAG, "SBERT model loaded")
+            tokenizer = Tokenizer.load(context, MODEL_FILE.removeSuffix(".tflite"), fallbackVocabSize = 32_000)
+            Log.d(TAG, "SBERT model loaded (tokenizer=${tokenizer::class.simpleName}, vocab=${tokenizer.vocabSize})")
             true
         } catch (e: Exception) {
             Log.w(TAG, "SBERT model not available — using hash embeddings fallback")
@@ -136,7 +138,7 @@ class EmbeddingEngine(private val context: Context) {
     // --- TFLite model path ---
 
     private fun embedWithModel(text: String): FloatArray? {
-        val tokens = tokenize(text)
+        val tokens = tokenizer.encode(text, MAX_SEQ_LEN)
         val input = ByteBuffer.allocateDirect(MAX_SEQ_LEN * 4).apply {
             order(ByteOrder.nativeOrder())
             tokens.forEach { putInt(it) }
@@ -148,9 +150,6 @@ class EmbeddingEngine(private val context: Context) {
         try {
             interpreter?.run(input, output)
         } catch (e: Exception) {
-            // Same hash-tokenizer out-of-vocab issue as NlpModelRunner: disable the
-            // model and fall back to the hash embedding instead of crashing the
-            // whole frame analysis.
             Log.w(TAG, "SBERT model inference failed — disabling, will use hash embedding fallback", e)
             close()
             return null
@@ -197,18 +196,5 @@ class EmbeddingEngine(private val context: Context) {
         var sum = 0f
         for (i in a.indices) { val d = a[i] - b[i]; sum += d * d }
         return sum
-    }
-
-    private fun tokenize(text: String): IntArray {
-        val words = text.lowercase().split(Regex("\\W+")).filter { it.isNotBlank() }
-        val ids = IntArray(MAX_SEQ_LEN)
-        ids[0] = 101 // [CLS]
-        var pos = 1
-        for (w in words) {
-            if (pos >= MAX_SEQ_LEN - 1) break
-            ids[pos++] = (w.hashCode() and 0x7FFF) + 1000
-        }
-        ids[pos] = 102 // [SEP]
-        return ids
     }
 }

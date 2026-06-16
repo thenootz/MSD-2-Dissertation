@@ -22,8 +22,7 @@ class MarkovChainAnalyzer {
      */
     fun addSequence(items: List<ContentItem>) {
         val topics = items.mapNotNull { item ->
-            item.topicLabels?.let { DriftAnalyzer.run { parseTopics(it) } }
-                ?.firstOrNull() // Use primary topic
+            item.topicLabels?.let { parseTopics(it) }?.firstOrNull()
         }
 
         for (i in 0 until topics.size - 1) {

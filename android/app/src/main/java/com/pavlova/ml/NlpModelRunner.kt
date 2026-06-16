@@ -30,13 +30,17 @@ class NlpModelRunner(
     private val modelFileName: String,
     private val maxSeqLen: Int = 128,
     private val numClasses: Int = 2,
-    private val labels: List<String> = listOf("negative", "positive")
+    private val labels: List<String> = listOf("negative", "positive"),
+    /** Fallback vocab size used when no real tokenizer assets ship with the
+     *  model (matches the Keras placeholder TFLite's embedding table). */
+    private val fallbackVocabSize: Int = 32_000
 ) {
     companion object {
         private const val TAG = "NlpModelRunner"
     }
 
     private var interpreter: Interpreter? = null
+    private var tokenizer: Tokenizer = HashTokenizer(fallbackVocabSize)
 
     val isAvailable: Boolean get() = interpreter != null
 
@@ -49,7 +53,11 @@ class NlpModelRunner(
                 setUseXNNPACK(true)
             }
             interpreter = Interpreter(modelBuffer, options)
-            Log.d(TAG, "Loaded NLP model: $modelFileName ($numClasses classes)")
+            // Pair the interpreter with the right tokenizer.
+            val stem = modelFileName.removeSuffix(".tflite")
+            tokenizer = Tokenizer.load(context, stem, fallbackVocabSize)
+            Log.d(TAG, "Loaded NLP model: $modelFileName ($numClasses classes, " +
+                "tokenizer=${tokenizer::class.simpleName}, vocab=${tokenizer.vocabSize})")
             true
         } catch (e: Exception) {
             Log.w(TAG, "NLP model not available: $modelFileName — will use heuristic fallback")
@@ -64,7 +72,7 @@ class NlpModelRunner(
         val interp = interpreter ?: return FloatArray(numClasses)
 
         // Pad or truncate to maxSeqLen
-        val padded = IntArray(maxSeqLen)
+        val padded = IntArray(maxSeqLen) { tokenizer.padId }
         tokenIds.copyInto(padded, endIndex = minOf(tokenIds.size, maxSeqLen))
 
         val inputBuffer = ByteBuffer.allocateDirect(maxSeqLen * 4).apply {
@@ -80,10 +88,8 @@ class NlpModelRunner(
         try {
             interp.run(inputBuffer, outputBuffer)
         } catch (e: Exception) {
-            // The placeholder hash-based tokenizer can produce token IDs outside the
-            // model's embedding vocab range, which crashes the GATHER op. Disable this
-            // runner so callers fall back to the keyword heuristic instead of crashing
-            // FeedAnalyzer.processFrame for every subsequent frame.
+            // Real tokenizer should keep ids in range, but keep the safety net
+            // for unexpected vocab/model mismatches.
             Log.w(TAG, "NLP model inference failed for $modelFileName — disabling, will use heuristic fallback", e)
             close()
             return FloatArray(numClasses)
@@ -100,11 +106,10 @@ class NlpModelRunner(
     }
 
     /**
-     * Convenience: predict from raw text using a simple whitespace tokenizer.
-     * For production, replace with WordPiece / BPE tokenizer.
+     * Convenience: predict from raw text using the bound tokenizer.
      */
     fun predictFromText(text: String): Pair<String, Float> {
-        val tokens = simpleTokenize(text)
+        val tokens = tokenizer.encode(text, maxSeqLen)
         val probs = predict(tokens)
         val topIdx = probs.indices.maxByOrNull { probs[it] } ?: 0
         return labels[topIdx] to probs[topIdx]
@@ -114,7 +119,7 @@ class NlpModelRunner(
      * Get full probability distribution as label→score map.
      */
     fun predictDistribution(text: String): Map<String, Float> {
-        val tokens = simpleTokenize(text)
+        val tokens = tokenizer.encode(text, maxSeqLen)
         val probs = predict(tokens)
         return labels.zip(probs.toList()).toMap()
     }
@@ -122,20 +127,5 @@ class NlpModelRunner(
     fun close() {
         interpreter?.close()
         interpreter = null
-    }
-
-    /**
-     * Simple whitespace tokenizer that maps words to hash-based IDs.
-     * Replace with a real WordPiece tokenizer for RoBERTa/BERT models.
-     */
-    private fun simpleTokenize(text: String): IntArray {
-        val words = text.lowercase().split(Regex("\\W+")).filter { it.isNotBlank() }
-        // [CLS]=101, token IDs via hash, [SEP]=102
-        val ids = mutableListOf(101)
-        for (w in words.take(maxSeqLen - 2)) {
-            ids.add((w.hashCode() and 0x7FFF) + 1000) // Positive ID in vocab range
-        }
-        ids.add(102)
-        return ids.toIntArray()
     }
 }

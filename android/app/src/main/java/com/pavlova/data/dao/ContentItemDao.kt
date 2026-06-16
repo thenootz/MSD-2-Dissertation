@@ -19,6 +19,9 @@ interface ContentItemDao {
     @Query("SELECT COUNT(*) FROM content_items WHERE sessionId = :sessionId")
     suspend fun getItemCount(sessionId: String): Int
 
+    @Query("SELECT COUNT(*) FROM content_items")
+    suspend fun getTotalCount(): Int
+
     @Query("SELECT AVG(sentimentScore) FROM content_items WHERE sessionId = :sessionId AND sentimentScore IS NOT NULL")
     suspend fun getAvgSentiment(sessionId: String): Float?
 
@@ -33,6 +36,9 @@ interface ContentItemDao {
 
     @Update
     suspend fun update(item: ContentItem)
+
+    @Query("UPDATE content_items SET creatorId = :creatorId WHERE id IN (:ids)")
+    suspend fun updateCreatorForIds(ids: List<Long>, creatorId: String?)
 
     @Query("DELETE FROM content_items WHERE sessionId = :sessionId")
     suspend fun deleteForSession(sessionId: String)

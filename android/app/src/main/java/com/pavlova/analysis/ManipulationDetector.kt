@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.pavlova.data.model.ContentItem
 import com.pavlova.data.model.SessionMetrics
+import com.pavlova.ml.ContentAnalyzer
 import com.pavlova.ml.EmbeddingEngine
 
 /**
@@ -29,7 +30,12 @@ object ManipulationDetector {
 
     fun initialize(context: Context) {
         sequenceAnalyzer = SequenceAnalyzer(context).also { it.load() }
-        embeddingEngine = EmbeddingEngine(context).also { it.load() }
+        // Reuse the SBERT engine already loaded by ContentAnalyzer instead of
+        // mapping the model file a second time. ContentAnalyzer is initialised
+        // first in PavlovaApplication.onCreate so this is non-null in practice;
+        // fall back to a fresh instance if the call order is ever reversed.
+        embeddingEngine = ContentAnalyzer.embeddingEngine()
+            ?: EmbeddingEngine(context).also { it.load() }
         isolationForest = IsolationForest(numTrees = 50, subsampleSize = 128)
     }
 
@@ -172,7 +178,7 @@ object ManipulationDetector {
 
     fun destroy() {
         sequenceAnalyzer?.close()
-        embeddingEngine?.close()
+        // Note: embeddingEngine is owned by ContentAnalyzer; do NOT close it here.
     }
 
     private fun parseJsonArray(json: String): List<String> {

@@ -99,7 +99,7 @@ dependencies {
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("net.zetetic:android-database-sqlcipher:4.5.4")
 
-    // TensorFlow Lite (for future Phase 2 NLP models — MobileBERT, toxicity)
+    // TensorFlow Li + tte — on-device RoBERTa sentimentoxicity, SBERT embeddings, LSTM sequence model
     val tfliteVersion = "2.16.1"
     implementation("org.tensorflow:tensorflow-lite:$tfliteVersion")
     implementation("org.tensorflow:tensorflow-lite-support:0.4.4")

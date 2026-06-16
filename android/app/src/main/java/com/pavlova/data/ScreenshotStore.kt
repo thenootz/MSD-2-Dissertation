@@ -55,6 +55,18 @@ object ScreenshotStore {
         return dir
     }
 
+    /** Delete every stored thumbnail. Used when verbose/demo mode is toggled OFF. */
+    fun clearAll(): Int {
+        val dir = getDir() ?: return 0
+        val files = dir.listFiles { f -> f.extension == "jpg" } ?: return 0
+        var deleted = 0
+        for (f in files) {
+            if (runCatching { f.delete() }.getOrDefault(false)) deleted++
+        }
+        Log.d(TAG, "Cleared $deleted screenshot thumbnails")
+        return deleted
+    }
+
     private fun downscale(src: Bitmap): Bitmap {
         val maxSide = maxOf(src.width, src.height)
         if (maxSide <= MAX_DIMENSION) return src
