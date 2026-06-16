@@ -21,8 +21,8 @@
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
 | **OCR** | Google ML Kit | Extract text from feed screenshots |
-| **NLP Classification** | RoBERTa (TFLite) | Sentiment, toxicity, emotion, persuasion |
-| **Semantic Clustering** | SBERT (TFLite) | Detect echo chambers via embedding similarity |
+| **NLP Classification** | RoBERTa (TFLite, BPE) | Sentiment, toxicity, emotion, persuasion |
+| **Semantic Clustering** | SBERT MiniLM (TFLite, WordPiece) | Detect echo chambers via embedding similarity |
 | **Sequence Analysis** | LSTM (TFLite) | Detect escalating content patterns over time |
 | **Feed Drift** | Markov Chains | Track topic transition probabilities & funnels |
 | **Anomaly Detection** | Isolation Forest | Flag abnormal recommendation sessions |

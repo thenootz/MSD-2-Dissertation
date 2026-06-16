@@ -1,8 +1,238 @@
-# Pavlova — Architecture Pivot Plan
+# Pavlova — Architecture
 
 > **"Explainable AI Framework for Auditing Algorithmic Manipulation in Social Media Recommendation Systems"**
 
+This document describes the **current** architecture of the Android app. The
+original phased pivot plan that drove the rewrite from the NSFW-filter
+prototype to the auditing tool is preserved in
+[Appendix A — Pivot plan (historical)](#appendix-a--pivot-plan-historical)
+for context.
+
 ---
+
+## High-level overview
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│                       PAVLOVA ANDROID APP                          │
+│                                                                    │
+│  UI (Compose, single-activity, 4 routes)                           │
+│  ├─ DashboardScreen      audit start/stop, sessions, latest score │
+│  ├─ SessionDetailScreen  per-item rows + (optional) thumbnails    │
+│  ├─ SettingsScreen       verbose / demo + debug capture toggles   │
+│  └─ DebugCapturesScreen  raw frame + OCR text log (developer)     │
+│                                                                    │
+│  Analysis engine                                                   │
+│  ├─ DriftAnalyzer        entropy / Gini / escalation              │
+│  ├─ MarkovChainAnalyzer  topic transition matrix + funnel finder  │
+│  ├─ SequenceAnalyzer     LSTM (TFLite) or statistical fallback    │
+│  ├─ IsolationForest      pure-Kotlin anomaly detector             │
+│  ├─ ManipulationDetector 10-indicator weighted score              │
+│  └─ ShapExplainer        permutation-importance human summaries   │
+│                                                                    │
+│  Content understanding                                             │
+│  ├─ TextExtractor        ML Kit OCR                               │
+│  ├─ NlpModelRunner       RoBERTa sentiment / toxicity (TFLite)    │
+│  ├─ EmbeddingEngine      SBERT MiniLM embeddings (TFLite)         │
+│  ├─ Tokenizer            BPE / WordPiece / hash fallback          │
+│  └─ ContentAnalyzer      orchestrates everything above            │
+│                                                                    │
+│  Capture                                                           │
+│  └─ ScreenCaptureService MediaProjection @ ~2 FPS, frame dedup    │
+│                                                                    │
+│  Data                                                              │
+│  ├─ Room + SQLCipher     FeedSession, ContentItem, SessionMetrics │
+│  ├─ ScreenshotStore      thumbnails (verbose mode only)           │
+│  └─ AppSettings          SharedPreferences (verboseMode flag)     │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+No network calls. All inference runs on-device.
+
+---
+
+## Runtime pipeline
+
+```
+ScreenCaptureService (MediaProjection, ~2 FPS, dedupe by content hash)
+  → FeedAnalyzer.processFrame(bytes, w, h)
+      → TextExtractor.bitmapFromRgba / extractText  (ML Kit OCR)
+      → ContentAnalyzer.analyzeText
+            sentiment       (RoBERTa TFLite or keyword fallback)
+            toxicity        (RoBERTa TFLite or keyword fallback)
+            topics          (keyword)
+            emotion         (keyword)
+            persuasion      (keyword)
+            embedding       (SBERT TFLite or hash fallback)
+      → ContentItem persisted in Room
+      → if verboseMode: ScreenshotStore.save() + ContentItem.update(path)
+      → DebugCaptureStore.save()  (no-op when disabled)
+      → every 10 items: ManipulationDetector.analyze() → SessionMetrics
+  → Compose UI collects sessions + metrics via Flow
+```
+
+`PavlovaApplication.onCreate()` initialises singletons in this order so
+later ones can read the earlier ones safely:
+
+```
+AppSettings → ScreenshotStore → DebugCaptureStore → ContentAnalyzer → ManipulationDetector
+```
+
+`ManipulationDetector.initialize` reuses the SBERT `EmbeddingEngine` owned
+by `ContentAnalyzer` so the model file isn't memory-mapped twice.
+
+---
+
+## Package layout
+
+`app/src/main/java/com/pavlova/`
+
+| Package | Files | Role |
+|---------|-------|------|
+| `services/` | `ScreenCaptureService` | Foreground service. Owns `MediaProjection`/`VirtualDisplay`/`ImageReader`; hands raw RGBA bytes to `FeedAnalyzer`. |
+| `ml/` | `TextExtractor`, `ContentAnalyzer`, `NlpModelRunner`, `EmbeddingEngine`, `Tokenizer`, `FeedAnalyzer`, `ContentAnalysis` | OCR + NLP pipeline. |
+| `analysis/` | `DriftAnalyzer`, `MarkovChainAnalyzer`, `SequenceAnalyzer`, `IsolationForest`, `ManipulationDetector`, `ShapExplainer`, `Visualization` (`UmapProjector`, `ContentGraph`) | Session-level scoring + explanation. |
+| `data/` | `database/PavlovaDatabase`, `dao/*`, `model/*`, `ScreenshotStore`, `AppSettings` | Encrypted Room + on-disk artefacts + prefs. |
+| `debug/` | `DebugCaptureStore` | Developer-only frame + OCR text log. |
+| `ui/` | `SessionDetailScreen`, `SettingsScreen`, `DebugCapturesScreen`, `components/Common.kt`, `theme/*` | Compose UI. |
+| `overlay/` | `OverlayManager` | Unused today. Kept for a future annotation overlay (see "Reserved for future" below). |
+| `permissions/` | `PermissionManager` | Permission helpers. The active flow only requests `POST_NOTIFICATIONS` and MediaProjection — `SYSTEM_ALERT_WINDOW` is no longer gated. |
+| (root) | `MainActivity`, `PavlovaApplication` | NavHost (4 routes) + app-level init. |
+
+---
+
+## Data model
+
+Three Room entities, encrypted at rest by SQLCipher:
+
+- **`FeedSession`** — `id` (UUID), `platform`, `startTime`, `endTime`, `totalItems`, `avgWatchDurationMs`.
+- **`ContentItem`** — per OCR'd feed item. FK → `FeedSession`. Fields: `position`, `timestamp`, `textContent`, `creatorId`, `screenshotPath?`, `topicLabels` (JSON array string), `sentimentScore`, `emotionLabel`, `toxicityScore`, `persuasionScore`, `watchDurationMs`, `userAction`.
+- **`SessionMetrics`** — computed periodically. FK → `FeedSession`. Fields: topic/creator entropy, unique topic/creator counts, avg sentiment / toxicity / persuasion, sentiment variance, emotional escalation, creator concentration, top-topic share, `manipulationScore`, `indicatorBreakdown` (JSON object string).
+
+Schema is at `version = 3` with `fallbackToDestructiveMigration` — schema
+edits wipe local state.
+
+JSON in fields like `topicLabels` is hand-rolled via small `parseJsonArray` /
+`topicsAsJson` helpers (no `kotlinx.serialization` dependency).
+
+---
+
+## ML model stack
+
+| Layer | Backend | File | Tokenizer | Fallback when model missing |
+|-------|---------|------|-----------|-----------------------------|
+| OCR | ML Kit (Google) | — | — | no fallback (required) |
+| Sentiment | RoBERTa (TFLite) | `roberta_sentiment.tflite` | BPE (`*_vocab.json` + `*_merges.txt`) | keyword bag-of-words |
+| Toxicity | RoBERTa (TFLite) | `roberta_toxicity.tflite` | BPE | keyword bag-of-words |
+| Embeddings | SBERT MiniLM (TFLite) | `sbert_quantized.tflite` | WordPiece (`*_vocab.txt`) | deterministic hash bag |
+| Sequence | LSTM (TFLite) | `sequence_lstm.tflite` | — (numeric input) | windowed linear regression |
+| Markov | pure Kotlin | — | — | — |
+| Anomaly | pure Kotlin Isolation Forest | — | — | neutral 0.5 score until trained |
+| Explainability | pure Kotlin permutation importance | — | — | — |
+
+All `.tflite` files plus their tokenizer asset bundles are gitignored and
+generated locally by `../scripts/collect_models.py` (HuggingFace → ONNX →
+onnx2tf). When the script can't reach HuggingFace it falls back to Keras
+placeholder TFLites with `vocab_size = 32_000`; in that mode the runner
+loads a `HashTokenizer` that clamps token ids into the safe range so the
+GATHER op does not crash. The `Tokenizer.load(context, stem, ...)` factory
+picks the right implementation per model.
+
+---
+
+## Privacy posture
+
+Default configuration:
+
+- Room database is SQLCipher-encrypted at rest.
+- No screen content is written to disk — only OCR text, creator handles, and
+  derived scores live in the database.
+- The foreground capture service shows an Android system notification while
+  active; users can revoke MediaProjection at any time.
+
+User-opt-in toggles (in `SettingsScreen`):
+
+- **Verbose / demo mode** (`AppSettings.verboseMode`, persisted in
+  SharedPreferences). When ON, `ScreenshotStore` writes a downscaled
+  (≤480 px, JPEG q=70) thumbnail per captured frame into
+  `<filesDir>/captures/`, and `ContentItem.screenshotPath` is populated.
+  Toggling OFF prompts the user to delete already-saved thumbnails
+  (`ScreenshotStore.clearAll()`).
+- **Debug capture** (`DebugCaptureStore`). Developer-only. Saves a
+  full-resolution JPEG + raw OCR text per frame into
+  `<getExternalFilesDir>/debug_captures/`. Independent of verbose mode;
+  capped at 100 entries (oldest pruned).
+
+Neither toggle changes any network behaviour — there is no network behaviour.
+
+---
+
+## Manipulation score
+
+`ManipulationDetector.analyze(sessionId, items)` produces a single
+`manipulationScore: Float` in `[0, 1]` from a weighted combination of ten
+indicators:
+
+| Indicator | Source | Weight |
+|-----------|--------|-------:|
+| `echo_chamber` | inverse-normalised topic entropy | 0.12 |
+| `emotional_escalation` | slope of `\|sentiment\|` over the session | 0.12 |
+| `content_steering` | share of items from the top topic | 0.10 |
+| `creator_concentration` | Gini of creator IDs | 0.10 |
+| `toxicity_level` | avg toxicity score | 0.10 |
+| `persuasion_pressure` | avg persuasion score | 0.10 |
+| `sequence_escalation` | `SequenceAnalyzer` LSTM/statistical | 0.12 |
+| `embedding_homogeneity` | 1 − avg pairwise embedding distance | 0.08 |
+| `anomaly_score` | `IsolationForest` over historical sessions | 0.12 |
+| `funnel_detected` | `MarkovChainAnalyzer.detectFunnels` ≠ ∅ | 0.04 |
+
+The breakdown is persisted as a JSON object in
+`SessionMetrics.indicatorBreakdown` for downstream explainability.
+`ShapExplainer.generateSummary(metrics)` renders the human-readable string
+shown in the dashboard ("High risk — driven by: …").
+
+---
+
+## Reserved for future
+
+- **`overlay/OverlayManager.kt`** — `WindowManager` overlay class kept for a
+  planned annotation-overlay feature (e.g. labelling flagged items in
+  real-time over the captured surface). Not invoked anywhere today, and the
+  capture flow no longer requests `SYSTEM_ALERT_WINDOW`.
+- **`analysis/Visualization.kt`** — `UmapProjector` (force-directed 2D
+  projection of embeddings) and `ContentGraph` (topic co-occurrence
+  graph). Defined and unit-testable but the dashboard does not yet render
+  them; intended as inputs to a future "feed map" screen.
+- Charting library (Vico) and `kotlinx.serialization` were listed in the
+  pivot plan but never adopted — the dashboard renders without a chart
+  library and JSON is hand-rolled. Keep new code consistent unless
+  introducing a chart screen makes Vico worthwhile.
+
+---
+
+## Build & test
+
+From `android/` on Windows:
+
+```powershell
+.\gradlew.bat assembleDebug
+.\gradlew.bat installDebug
+.\gradlew.bat test                # JVM unit tests (TokenizerTest today)
+.\gradlew.bat connectedAndroidTest
+.\gradlew.bat lint
+```
+
+`minSdk 26`, `targetSdk = compileSdk = 35`, Java/Kotlin 17. Compose enabled
+via the Kotlin Compose plugin (no manual compose-compiler version).
+
+---
+
+## Appendix A — Pivot plan (historical)
+
+The remainder of this file is the original pivot plan from the
+NSFW-filter prototype to the auditing tool. It is kept for context but is
+no longer the authoritative description of the codebase — the sections
+above are.
 
 ## Current State (after Rust removal)
 

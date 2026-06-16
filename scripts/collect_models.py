@@ -16,6 +16,20 @@ Produces 4 TFLite models in android/app/src/main/assets/:
     sbert_quantized.tflite     128-D sentence embeddings
     sequence_lstm.tflite       sequence escalation detector (20×5 → 3)
 
+When the real HuggingFace download succeeds, each NLP model also gets a
+sibling tokenizer asset bundle written into the same assets folder:
+
+    roberta_sentiment_vocab.json    + roberta_sentiment_merges.txt    (BPE)
+    roberta_sentiment_tokenizer.json
+    sbert_quantized_vocab.txt       (WordPiece)
+    sbert_quantized_tokenizer.json
+
+The Android `Tokenizer` factory loads these at runtime so on-device
+inference uses the same vocabulary the model was trained on. If the
+assets are absent (e.g. when only the Keras placeholder TFLite shipped),
+the runner falls back to a deterministic hash tokenizer scoped to the
+placeholder's vocab range.
+
 Pipeline per model:
     1. Download HuggingFace weights  →  PyTorch
     2. Export to ONNX
@@ -261,6 +275,7 @@ def _try_hf_classifier(model_name: str, tflite_path: Path,
 
         _onnx_to_tflite(onnx_path, tflite_path)
         onnx_path.unlink(missing_ok=True)
+        _export_tokenizer_assets(tokenizer, tflite_path.stem)
         _print_done(tflite_path)
         return True
     except Exception as e:
@@ -301,12 +316,83 @@ def _try_hf_sbert(tflite_path: Path) -> bool:
 
         _onnx_to_tflite(onnx_path, tflite_path)
         onnx_path.unlink(missing_ok=True)
+        _export_tokenizer_assets(tokenizer, tflite_path.stem)
         _print_done(tflite_path)
         return True
     except Exception as e:
         print(f"  ⚠ SBERT conversion failed: {e}")
         tflite_path.with_suffix(".onnx").unlink(missing_ok=True)
         return False
+
+
+# ── Tokenizer asset export ─────────────────────────────────────────────
+
+def _export_tokenizer_assets(tokenizer, model_stem: str):
+    """Save the HuggingFace tokenizer's vocab/merges into the Android assets
+    folder so the on-device runner can tokenise input the same way the model
+    was trained.
+
+    Produces, for stem ``roberta_sentiment``:
+      roberta_sentiment_vocab.json
+      roberta_sentiment_merges.txt   (BPE models only)
+      roberta_sentiment_tokenizer.json  (config: type, special ids, ...)
+
+    For WordPiece (BERT-style) models the vocab is emitted as ``*_vocab.txt``.
+    """
+    import json
+
+    out_dir = ASSETS_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Detect tokenizer family.
+    cls = type(tokenizer).__name__.lower()
+    is_bpe = "roberta" in cls or "gpt" in cls or "bart" in cls
+    is_wordpiece = "bert" in cls and not is_bpe
+
+    config = {
+        "tokenizer_class": cls,
+        "vocab_size": tokenizer.vocab_size,
+        "model_max_length": getattr(tokenizer, "model_max_length", None),
+        "pad_token_id": tokenizer.pad_token_id,
+        "unk_token_id": tokenizer.unk_token_id,
+        "cls_token_id": tokenizer.cls_token_id,
+        "sep_token_id": tokenizer.sep_token_id,
+        "bos_token_id": getattr(tokenizer, "bos_token_id", None),
+        "eos_token_id": getattr(tokenizer, "eos_token_id", None),
+        "do_lower_case": getattr(tokenizer, "do_lower_case", False),
+        "family": "bpe" if is_bpe else ("wordpiece" if is_wordpiece else "unknown"),
+    }
+
+    if is_bpe:
+        vocab = tokenizer.get_vocab()
+        (out_dir / f"{model_stem}_vocab.json").write_text(
+            json.dumps(vocab, ensure_ascii=False), encoding="utf-8")
+        # merges.txt is only accessible via the slow tokenizer; convert if needed.
+        try:
+            slow = tokenizer
+            if not hasattr(slow, "bpe_ranks"):
+                from transformers import AutoTokenizer
+                slow = AutoTokenizer.from_pretrained(
+                    tokenizer.name_or_path, use_fast=False)
+            merges = sorted(slow.bpe_ranks.items(), key=lambda kv: kv[1])
+            with open(out_dir / f"{model_stem}_merges.txt", "w", encoding="utf-8") as f:
+                f.write("#version: 0.2\n")
+                for (a, b), _ in merges:
+                    f.write(f"{a} {b}\n")
+        except Exception as e:
+            print(f"  ⚠ Could not export merges.txt for {model_stem}: {e}")
+    elif is_wordpiece:
+        vocab = tokenizer.get_vocab()
+        ordered = sorted(vocab.items(), key=lambda kv: kv[1])
+        with open(out_dir / f"{model_stem}_vocab.txt", "w", encoding="utf-8") as f:
+            for tok, _ in ordered:
+                f.write(tok + "\n")
+    else:
+        print(f"  ⚠ Unknown tokenizer family for {cls}; skipping asset export")
+
+    (out_dir / f"{model_stem}_tokenizer.json").write_text(
+        json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"  Tokenizer assets exported for {model_stem} ({config['family']})")
 
 
 # ── Display helpers ─────────────────────────────────────────────────────
