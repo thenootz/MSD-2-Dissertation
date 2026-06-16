@@ -114,11 +114,11 @@ object ShapExplainer {
     fun generateSummary(metrics: SessionMetrics): String {
         val explanations = explain(metrics)
         if (metrics.manipulationScore < 0.3f) {
-            return "No significant manipulation indicators detected."
+            return "No notable feed-shaping patterns detected."
         }
 
         val topFactors = explanations.take(3).filter { it.importance > 0.01f }
-        if (topFactors.isEmpty()) return "Low-level concern detected."
+        if (topFactors.isEmpty()) return "Light feed-shaping detected."
 
         val lines = topFactors.map { exp ->
             val arrow = if (exp.direction == "high") "↑" else "→"
@@ -126,12 +126,12 @@ object ShapExplainer {
         }
 
         val severity = when {
-            metrics.manipulationScore > 0.7f -> "High risk"
-            metrics.manipulationScore > 0.4f -> "Moderate concern"
-            else -> "Mild indicators"
+            metrics.manipulationScore > 0.7f -> "Strong feed-shaping"
+            metrics.manipulationScore > 0.4f -> "Moderate feed-shaping"
+            else -> "Light feed-shaping"
         }
 
-        return "$severity — driven by: ${lines.joinToString(", ")}"
+        return "$severity — shaped by: ${lines.joinToString(", ")}"
     }
 }
 

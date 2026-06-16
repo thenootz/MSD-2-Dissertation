@@ -23,6 +23,7 @@ import androidx.core.view.WindowCompat
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.pavlova.analysis.SessionTrendAnalyzer
 import com.pavlova.analysis.ShapExplainer
 import com.pavlova.data.AppSettings
 import com.pavlova.data.database.PavlovaDatabase
@@ -35,7 +36,8 @@ import com.pavlova.ui.SessionDetailScreen
 import com.pavlova.ui.SettingsScreen
 import com.pavlova.ui.components.MetricChip
 import com.pavlova.ui.theme.PavlovaTheme
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
@@ -120,9 +122,9 @@ class MainActivity : ComponentActivity() {
             return
         }
         // Note: SYSTEM_ALERT_WINDOW (overlay) permission is intentionally NOT
-        // requested here — the active auditing pipeline never draws an
-        // overlay. OverlayManager remains in the codebase for a future
-        // annotation-overlay feature.
+        // requested here. It's only needed for the optional on-screen wellbeing
+        // alerts (OverlayManager), which the user enables and grants separately
+        // from the Settings screen — capture works fine without it.
         mediaProjectionLauncher.launch(permissionManager.getMediaProjectionIntent())
     }
 
@@ -156,11 +158,31 @@ fun DashboardScreen(
 ) {
     var isAuditing by remember { mutableStateOf(false) }
     val verboseMode by AppSettings.verboseModeFlow.collectAsState()
+    val alertsEnabled by AppSettings.alertsEnabledFlow.collectAsState()
 
     val sessions by db.feedSessionDao().getAllSessions()
         .collectAsState(initial = emptyList())
     val recentMetrics by db.sessionMetricsDao().getRecentMetrics(10)
         .collectAsState(initial = emptyList())
+    var trendReport by remember { mutableStateOf<SessionTrendAnalyzer.Report?>(null) }
+
+    // Cross-session trend analysis (longitudinal): duration slope, frequency
+    // slope, and creator concentration growth.
+    LaunchedEffect(sessions) {
+        val completed = sessions.filter { it.endTime != null }
+            .sortedBy { it.startTime }
+            .takeLast(20)
+        trendReport = if (completed.size < 2) {
+            null
+        } else {
+            withContext(Dispatchers.IO) {
+                val itemsBySession = completed.associate { s ->
+                    s.id to db.contentItemDao().getItemsForSessionSync(s.id)
+                }
+                SessionTrendAnalyzer.analyze(completed, itemsBySession)
+            }
+        }
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -220,12 +242,25 @@ fun DashboardScreen(
                     Text("Permissions", style = MaterialTheme.typography.titleSmall)
                     Spacer(modifier = Modifier.height(4.dp))
                     PermissionRow("Notifications", permissionManager.hasNotificationPermission())
+                    // Overlay permission only matters when wellbeing alerts are on.
+                    if (alertsEnabled) {
+                        PermissionRow("Alerts overlay", permissionManager.hasOverlayPermission())
+                    }
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         "Verbose / demo mode: ${if (verboseMode) "ON" else "OFF"}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    if (alertsEnabled && !permissionManager.hasOverlayPermission()) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "Alerts are on but can't be shown — grant " +
+                                "\"display over other apps\" in Settings.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
                 }
             }
         }
@@ -242,6 +277,20 @@ fun DashboardScreen(
             item {
                 val latest = recentMetrics.first()
                 MetricsCard(latest)
+            }
+        }
+
+        // Longitudinal behavior trends across sessions
+        trendReport?.let { report ->
+            item {
+                Text(
+                    "Behavior Trends (Across Sessions)",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            item {
+                SessionTrendCard(report)
             }
         }
 
@@ -279,7 +328,7 @@ fun MetricsCard(metrics: SessionMetrics) {
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text("Manipulation Risk", style = MaterialTheme.typography.titleSmall)
+                Text("Feed Influence", style = MaterialTheme.typography.titleSmall)
                 Text(
                     "${(metrics.manipulationScore * 100).toInt()}%",
                     style = MaterialTheme.typography.titleMedium,
@@ -315,6 +364,74 @@ fun MetricsCard(metrics: SessionMetrics) {
 }
 
 @Composable
+fun SessionTrendCard(report: SessionTrendAnalyzer.Report) {
+    val trendColor = when (report.addictionLabel) {
+        "High" -> MaterialTheme.colorScheme.errorContainer
+        "Moderate" -> MaterialTheme.colorScheme.tertiaryContainer
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }
+    val durationArrow = if (report.durationSlopeMinPerSession >= 0f) "↑" else "↓"
+    val frequencyArrow = if (report.gapSlopeHoursPerSession < 0f) "↑" else "↓"
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = trendColor)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text("Addiction trend signal", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "${report.addictionLabel} ${(report.addictionScore * 100).toInt()}%",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            LinearProgressIndicator(
+                progress = report.addictionScore,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                MetricChip("Sessions: ${report.sessionCount}")
+                MetricChip("Avg duration: ${"%.1f".format(report.avgDurationMinutes)}m")
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                MetricChip("Duration trend: $durationArrow ${"%.2f".format(report.durationSlopeMinPerSession)}m/session")
+                MetricChip("Frequency trend: $frequencyArrow ${"%.2f".format(kotlin.math.abs(report.gapSlopeHoursPerSession))}h/session")
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                "Session duration change: ${"%.1f".format(report.durationIncreasePct)}%",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            if (report.growingCreators.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "Creators increasingly watched:",
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                report.growingCreators.forEach { growth ->
+                    Text(
+                        "• @${growth.creatorId} (+${"%.1f".format(growth.delta * 100)}pp)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun SessionCard(session: FeedSession, metrics: SessionMetrics?, onClick: () -> Unit) {
     Card(
         modifier = Modifier
@@ -335,7 +452,7 @@ fun SessionCard(session: FeedSession, metrics: SessionMetrics?, onClick: () -> U
             if (metrics != null) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    "Risk: ${(metrics.manipulationScore * 100).toInt()}% | " +
+                    "Influence: ${(metrics.manipulationScore * 100).toInt()}% | " +
                     "Topics: ${metrics.uniqueTopics} | " +
                     "Sentiment: ${"%.2f".format(metrics.avgSentiment)}",
                     style = MaterialTheme.typography.bodySmall,

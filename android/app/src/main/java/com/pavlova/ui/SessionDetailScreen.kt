@@ -116,7 +116,7 @@ private fun SessionSummaryHeader(session: FeedSession?, metrics: SessionMetrics?
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text("Manipulation Risk", style = MaterialTheme.typography.bodyMedium)
+                    Text("Feed Influence", style = MaterialTheme.typography.bodyMedium)
                     Text(
                         "${(metrics.manipulationScore * 100).toInt()}%",
                         style = MaterialTheme.typography.bodyMedium,

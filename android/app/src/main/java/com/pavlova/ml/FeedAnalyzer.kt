@@ -3,6 +3,7 @@ package com.pavlova.ml
 import android.content.Context
 import android.media.Image
 import android.util.Log
+import com.pavlova.analysis.FeedAlerts
 import com.pavlova.analysis.ManipulationDetector
 import com.pavlova.data.AppSettings
 import com.pavlova.data.ScreenshotStore
@@ -13,6 +14,7 @@ import com.pavlova.data.database.PavlovaDatabase
 import com.pavlova.data.model.ContentItem
 import com.pavlova.data.model.FeedSession
 import com.pavlova.debug.DebugCaptureStore
+import com.pavlova.overlay.OverlayManager
 import kotlinx.coroutines.*
 
 /**
@@ -26,6 +28,7 @@ class FeedAnalyzer(context: Context) {
     companion object {
         private const val TAG = "FeedAnalyzer"
         private const val METRICS_INTERVAL = 10 // Recompute metrics every N items
+        private const val ALERT_COOLDOWN_MS = 45_000L // Don't repeat the same alert too often
     }
 
     private val db = PavlovaDatabase.getDatabase(context)
@@ -33,12 +36,17 @@ class FeedAnalyzer(context: Context) {
     private val contentDao: ContentItemDao = db.contentItemDao()
     private val metricsDao: SessionMetricsDao = db.sessionMetricsDao()
 
+    private val overlay = OverlayManager(context)
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private var currentSession: FeedSession? = null
     private var itemPosition = 0
     private var lastFrameHash = 0
     private val creatorDetector = CreatorDetector()
+
+    /** Last time each alert type was shown, for per-type cooldown. */
+    private val lastAlertAt = mutableMapOf<String, Long>()
 
     /** Row IDs of ContentItems we've inserted for the current video segment,
      *  so we can back-fill `creatorId` once the detector resolves it. */
@@ -77,6 +85,7 @@ class FeedAnalyzer(context: Context) {
         // Compute final metrics
         computeMetrics(session.id)
 
+        overlay.hide()
         currentSession = null
         Log.d(TAG, "Session ended: ${session.id}, items=$itemPosition")
     }
@@ -195,12 +204,37 @@ class FeedAnalyzer(context: Context) {
 
             Log.d(TAG, "Metrics for $sessionId: manipulation=${metrics.manipulationScore}, " +
                     "topicEntropy=${metrics.topicEntropy}, escalation=${metrics.emotionalEscalation}")
+
+            maybeShowAlerts(metrics)
         } catch (e: Exception) {
             Log.e(TAG, "Error computing metrics", e)
         }
     }
 
+    /**
+     * Evaluate wellbeing thresholds and surface an on-screen alert banner when
+     * crossed. Respects the user's [AppSettings.alertsEnabled] toggle, the
+     * draw-over-other-apps permission, and a per-type cooldown.
+     */
+    private fun maybeShowAlerts(metrics: com.pavlova.data.model.SessionMetrics) {
+        if (!AppSettings.alertsEnabled) return
+        if (!overlay.canDrawOverlays()) return
+
+        val now = System.currentTimeMillis()
+        val due = FeedAlerts.evaluate(metrics).filter { alert ->
+            now - (lastAlertAt[alert.key] ?: 0L) > ALERT_COOLDOWN_MS
+        }
+        if (due.isEmpty()) return
+
+        // Show the single most severe due alert (avoid stacking banners).
+        val top = due.maxByOrNull { it.level.ordinal } ?: return
+        due.forEach { lastAlertAt[it.key] = now }
+        overlay.showAlert(top.title, top.body, top.level)
+        Log.d(TAG, "Alert shown: ${top.key} (${top.level})")
+    }
+
     fun destroy() {
+        overlay.cleanup()
         scope.cancel()
     }
 }

@@ -28,6 +28,7 @@ for context.
 │  ├─ SequenceAnalyzer     LSTM (TFLite) or statistical fallback    │
 │  ├─ IsolationForest      pure-Kotlin anomaly detector             │
 │  ├─ ManipulationDetector 10-indicator weighted score              │
+│  ├─ SessionTrendAnalyzer cross-session behavior trend detection   │
 │  └─ ShapExplainer        permutation-importance human summaries   │
 │                                                                    │
 │  Content understanding                                             │
@@ -35,6 +36,7 @@ for context.
 │  ├─ NlpModelRunner       RoBERTa sentiment / toxicity (TFLite)    │
 │  ├─ EmbeddingEngine      SBERT MiniLM embeddings (TFLite)         │
 │  ├─ Tokenizer            BPE / WordPiece / hash fallback          │
+│  ├─ CreatorDetector      per-video creator tracking + back-fill   │
 │  └─ ContentAnalyzer      orchestrates everything above            │
 │                                                                    │
 │  Capture                                                           │
@@ -56,7 +58,7 @@ No network calls. All inference runs on-device.
 ```
 ScreenCaptureService (MediaProjection, ~2 FPS, dedupe by content hash)
   → FeedAnalyzer.processFrame(bytes, w, h)
-      → TextExtractor.bitmapFromRgba / extractText  (ML Kit OCR)
+      → TextExtractor.bitmapFromRgba / extractStructured (ML Kit OCR + line boxes)
       → ContentAnalyzer.analyzeText
             sentiment       (RoBERTa TFLite or keyword fallback)
             toxicity        (RoBERTa TFLite or keyword fallback)
@@ -64,10 +66,15 @@ ScreenCaptureService (MediaProjection, ~2 FPS, dedupe by content hash)
             emotion         (keyword)
             persuasion      (keyword)
             embedding       (SBERT TFLite or hash fallback)
-      → ContentItem persisted in Room
+      → CreatorDetector.submit(ocrBlocks)
+            segment boundary via bottom-band similarity
+            creator lock per segment
+            DB back-fill for early frames in same segment
+      → ContentItem persisted in Room (creator may be back-filled shortly after)
       → if verboseMode: ScreenshotStore.save() + ContentItem.update(path)
       → DebugCaptureStore.save()  (no-op when disabled)
       → every 10 items: ManipulationDetector.analyze() → SessionMetrics
+      → Dashboard longitudinal pass: SessionTrendAnalyzer over completed sessions
   → Compose UI collects sessions + metrics via Flow
 ```
 
@@ -90,12 +97,12 @@ by `ContentAnalyzer` so the model file isn't memory-mapped twice.
 | Package | Files | Role |
 |---------|-------|------|
 | `services/` | `ScreenCaptureService` | Foreground service. Owns `MediaProjection`/`VirtualDisplay`/`ImageReader`; hands raw RGBA bytes to `FeedAnalyzer`. |
-| `ml/` | `TextExtractor`, `ContentAnalyzer`, `NlpModelRunner`, `EmbeddingEngine`, `Tokenizer`, `FeedAnalyzer`, `ContentAnalysis` | OCR + NLP pipeline. |
-| `analysis/` | `DriftAnalyzer`, `MarkovChainAnalyzer`, `SequenceAnalyzer`, `IsolationForest`, `ManipulationDetector`, `ShapExplainer`, `Visualization` (`UmapProjector`, `ContentGraph`) | Session-level scoring + explanation. |
+| `ml/` | `TextExtractor`, `CreatorDetector`, `ContentAnalyzer`, `NlpModelRunner`, `EmbeddingEngine`, `Tokenizer`, `FeedAnalyzer`, `ContentAnalysis` | OCR + NLP pipeline + per-video creator resolution/back-fill. |
+| `analysis/` | `DriftAnalyzer`, `MarkovChainAnalyzer`, `SequenceAnalyzer`, `IsolationForest`, `ManipulationDetector`, `SessionTrendAnalyzer`, `FeedAlerts`, `ShapExplainer`, `Visualization` (`UmapProjector`, `ContentGraph`) | Session-level scoring, longitudinal trend analysis, and wellbeing-alert thresholds. |
 | `data/` | `database/PavlovaDatabase`, `dao/*`, `model/*`, `ScreenshotStore`, `AppSettings` | Encrypted Room + on-disk artefacts + prefs. |
 | `debug/` | `DebugCaptureStore` | Developer-only frame + OCR text log. |
 | `ui/` | `SessionDetailScreen`, `SettingsScreen`, `DebugCapturesScreen`, `components/Common.kt`, `theme/*` | Compose UI. |
-| `overlay/` | `OverlayManager` | Unused today. Kept for a future annotation overlay (see "Reserved for future" below). |
+| `overlay/` | `OverlayManager` | Draws auto-dismissing wellbeing alert banners over other apps (`SYSTEM_ALERT_WINDOW`). Driven by `FeedAnalyzer` + `FeedAlerts`. |
 | `permissions/` | `PermissionManager` | Permission helpers. The active flow only requests `POST_NOTIFICATIONS` and MediaProjection — `SYSTEM_ALERT_WINDOW` is no longer gated. |
 | (root) | `MainActivity`, `PavlovaApplication` | NavHost (4 routes) + app-level init. |
 
@@ -193,12 +200,59 @@ shown in the dashboard ("High risk — driven by: …").
 
 ---
 
+## Cross-session behavior trends
+
+`SessionTrendAnalyzer.analyze(completedSessions, itemsBySession)` computes
+longitudinal metrics across recent completed sessions (currently the last 20),
+rendered in the dashboard's **Behavior Trends (Across Sessions)** card.
+
+It detects:
+
+- **Session-duration trend** (minutes per session slope + first→last delta%)
+- **Usage-frequency trend** (slope of inter-session start gaps; shrinking gaps
+  indicate more frequent usage)
+- **Creator concentration trend** and top creators whose session-share is
+  increasing over time
+
+From these signals it derives a 0–1 **addiction trend score** with
+`Low/Moderate/High` bands. This is intentionally separate from
+`manipulationScore` (which is per-session), so dashboards can show both
+"what this session looked like" and "how behavior is changing across sessions."
+
+---
+
+## On-screen wellbeing alerts
+
+While an audit session runs, `FeedAnalyzer` evaluates each freshly computed
+`SessionMetrics` against soft wellbeing thresholds via `FeedAlerts.evaluate`
+and surfaces a heads-up banner over the social-media app through
+`overlay/OverlayManager`.
+
+Three alert types (each with WARNING/CRITICAL tiers):
+
+- **Toxicity** — `avgToxicity` above threshold ("heavy content").
+- **Feed shaping** — `manipulationScore` above threshold ("your feed is being
+  shaped").
+- **Isolation / echo chamber** — `max(creatorConcentration, topTopicShare)`
+  above threshold ("your feed is narrowing").
+
+`OverlayManager` draws a `FLAG_NOT_TOUCHABLE` `TYPE_APPLICATION_OVERLAY`
+banner that auto-dismisses after a few seconds, so it never intercepts touch
+input. The feature is gated by:
+
+- the `AppSettings.alertsEnabled` toggle (default on), and
+- the `SYSTEM_ALERT_WINDOW` (draw-over-other-apps) permission, which the user
+  grants from `SettingsScreen` (the screen detects the missing permission and
+  shows a "Grant permission" prompt).
+
+A per-alert-type cooldown in `FeedAnalyzer` prevents the same banner from
+repeating too frequently; only the single most severe due alert is shown at a
+time.
+
+---
+
 ## Reserved for future
 
-- **`overlay/OverlayManager.kt`** — `WindowManager` overlay class kept for a
-  planned annotation-overlay feature (e.g. labelling flagged items in
-  real-time over the captured surface). Not invoked anywhere today, and the
-  capture flow no longer requests `SYSTEM_ALERT_WINDOW`.
 - **`analysis/Visualization.kt`** — `UmapProjector` (force-directed 2D
   projection of embeddings) and `ContentGraph` (topic co-occurrence
   graph). Defined and unit-testable but the dashboard does not yet render

@@ -1,6 +1,10 @@
 package com.pavlova.ui
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -9,8 +13,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.pavlova.data.AppSettings
 import com.pavlova.data.ScreenshotStore
 import com.pavlova.data.database.PavlovaDatabase
@@ -27,11 +34,29 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     val verbose by AppSettings.verboseModeFlow.collectAsState()
+    val alertsEnabled by AppSettings.alertsEnabledFlow.collectAsState()
     var debugEnabled by remember { mutableStateOf(DebugCaptureStore.isEnabled()) }
     var pendingDisableVerbose by remember { mutableStateOf(false) }
     var pendingClearSessions by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val snackbarHost = remember { SnackbarHostState() }
+
+    // Re-read overlay permission when returning from the system settings screen.
+    var canDrawOverlays by remember { mutableStateOf(hasOverlayPermission(context)) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                val granted = hasOverlayPermission(context)
+                if (granted && !canDrawOverlays) {
+                    scope.launch { snackbarHost.showSnackbar("Overlay permission granted — alerts are active") }
+                }
+                canDrawOverlays = granted
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     Scaffold(
         topBar = {
@@ -87,6 +112,50 @@ fun SettingsScreen(
             if (debugEnabled) {
                 TextButton(onClick = onOpenDebugCaptures) {
                     Text("Open debug captures →")
+                }
+            }
+
+            Divider()
+
+            Text(
+                "On-screen alerts",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+
+            SettingsToggleCard(
+                title = "Wellbeing alerts",
+                description = "Show a banner over the social-media app when " +
+                    "your feed crosses thresholds for toxicity, feed-shaping, " +
+                    "or isolation (echo chamber). Requires draw-over-other-apps.",
+                checked = alertsEnabled,
+                onCheckedChange = { AppSettings.setAlertsEnabled(it) }
+            )
+
+            if (alertsEnabled && !canDrawOverlays) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            "Permission required",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "Alerts can't be shown until you allow Pavlova to " +
+                                "draw over other apps.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(onClick = { requestOverlayPermission(context) }) {
+                            Text("Grant permission")
+                        }
+                    }
                 }
             }
 
@@ -191,6 +260,21 @@ fun SettingsScreen(
 }
 
 private data class ClearResult(val sessions: Int, val items: Int, val thumbnails: Int)
+
+private fun hasOverlayPermission(context: Context): Boolean =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        Settings.canDrawOverlays(context)
+    } else true
+
+private fun requestOverlayPermission(context: Context) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        val intent = Intent(
+            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+            Uri.parse("package:${context.packageName}")
+        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(intent)
+    }
+}
 
 /**
  * Wipe every recorded session from the encrypted Room database plus any

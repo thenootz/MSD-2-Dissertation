@@ -65,7 +65,12 @@ class PermissionManager(private val context: Context) {
         return projectionManager.createScreenCaptureIntent()
     }
 
+    /**
+     * Permissions the core capture flow needs. Overlay (`SYSTEM_ALERT_WINDOW`)
+     * is intentionally NOT included — it is optional and only used by the
+     * on-screen wellbeing alerts, which are requested separately from Settings.
+     */
     fun hasAllRequiredPermissions(): Boolean {
-        return hasOverlayPermission() && hasNotificationPermission()
+        return hasNotificationPermission()
     }
 }
