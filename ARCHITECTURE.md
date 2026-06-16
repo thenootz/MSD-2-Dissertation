@@ -36,6 +36,7 @@ for context.
 │  ├─ NlpModelRunner       RoBERTa sentiment / toxicity (TFLite)    │
 │  ├─ EmbeddingEngine      SBERT MiniLM embeddings (TFLite)         │
 │  ├─ Tokenizer            BPE / WordPiece / hash fallback          │
+│  ├─ VideoSegmenter       scroll-vs-tap video boundary detection   │
 │  ├─ CreatorDetector      per-video creator tracking + back-fill   │
 │  └─ ContentAnalyzer      orchestrates everything above            │
 │                                                                    │
@@ -66,14 +67,16 @@ ScreenCaptureService (MediaProjection, ~2 FPS, dedupe by content hash)
             emotion         (keyword)
             persuasion      (keyword)
             embedding       (SBERT TFLite or hash fallback)
+      → VideoSegmenter.update(frameSignature, bottomBandText, a11yScrollHint)
+            scroll detected (frame diff / vertical shift / accessibility scroll)
+            + bottom-band change ⇒ new videoIndex
       → CreatorDetector.submit(ocrBlocks)
-            segment boundary via bottom-band similarity
-            creator lock per segment
-            DB back-fill for early frames in same segment
-      → ContentItem persisted in Room (creator may be back-filled shortly after)
+            creator lock per video; DB back-fill for early frames
+      → ContentItem persisted in Room (tagged with videoIndex)
       → if verboseMode: ScreenshotStore.save() + ContentItem.update(path)
       → DebugCaptureStore.save()  (no-op when disabled)
       → every 10 items: ManipulationDetector.analyze() → SessionMetrics
+            → FeedAlerts.evaluate → OverlayManager banner (if thresholds crossed)
       → Dashboard longitudinal pass: SessionTrendAnalyzer over completed sessions
   → Compose UI collects sessions + metrics via Flow
 ```
@@ -96,8 +99,8 @@ by `ContentAnalyzer` so the model file isn't memory-mapped twice.
 
 | Package | Files | Role |
 |---------|-------|------|
-| `services/` | `ScreenCaptureService` | Foreground service. Owns `MediaProjection`/`VirtualDisplay`/`ImageReader`; hands raw RGBA bytes to `FeedAnalyzer`. |
-| `ml/` | `TextExtractor`, `CreatorDetector`, `ContentAnalyzer`, `NlpModelRunner`, `EmbeddingEngine`, `Tokenizer`, `FeedAnalyzer`, `ContentAnalysis` | OCR + NLP pipeline + per-video creator resolution/back-fill. |
+| `services/` | `ScreenCaptureService`, `CaptureState`, `PavlovaAccessibilityService`, `ScrollSignal` | Capture foreground service + shared run-state flow; optional accessibility scroll detector + its cross-component signal bridge. |
+| `ml/` | `TextExtractor`, `CreatorDetector`, `VideoSegmenter`, `ContentAnalyzer`, `NlpModelRunner`, `EmbeddingEngine`, `Tokenizer`, `FeedAnalyzer`, `ContentAnalysis` | OCR + NLP pipeline, scroll-based video segmentation, and per-video creator resolution/back-fill. |
 | `analysis/` | `DriftAnalyzer`, `MarkovChainAnalyzer`, `SequenceAnalyzer`, `IsolationForest`, `ManipulationDetector`, `SessionTrendAnalyzer`, `FeedAlerts`, `ShapExplainer`, `Visualization` (`UmapProjector`, `ContentGraph`) | Session-level scoring, longitudinal trend analysis, and wellbeing-alert thresholds. |
 | `data/` | `database/PavlovaDatabase`, `dao/*`, `model/*`, `ScreenshotStore`, `AppSettings` | Encrypted Room + on-disk artefacts + prefs. |
 | `debug/` | `DebugCaptureStore` | Developer-only frame + OCR text log. |
@@ -113,10 +116,10 @@ by `ContentAnalyzer` so the model file isn't memory-mapped twice.
 Three Room entities, encrypted at rest by SQLCipher:
 
 - **`FeedSession`** — `id` (UUID), `platform`, `startTime`, `endTime`, `totalItems`, `avgWatchDurationMs`.
-- **`ContentItem`** — per OCR'd feed item. FK → `FeedSession`. Fields: `position`, `timestamp`, `textContent`, `creatorId`, `screenshotPath?`, `topicLabels` (JSON array string), `sentimentScore`, `emotionLabel`, `toxicityScore`, `persuasionScore`, `watchDurationMs`, `userAction`.
+- **`ContentItem`** — per OCR'd feed item. FK → `FeedSession`. Fields: `position`, `videoIndex`, `timestamp`, `textContent`, `creatorId`, `screenshotPath?`, `topicLabels` (JSON array string), `sentimentScore`, `emotionLabel`, `toxicityScore`, `persuasionScore`, `watchDurationMs`, `userAction`. `videoIndex` groups consecutive frames belonging to the same short video (assigned by `VideoSegmenter`).
 - **`SessionMetrics`** — computed periodically. FK → `FeedSession`. Fields: topic/creator entropy, unique topic/creator counts, avg sentiment / toxicity / persuasion, sentiment variance, emotional escalation, creator concentration, top-topic share, `manipulationScore`, `indicatorBreakdown` (JSON object string).
 
-Schema is at `version = 3` with `fallbackToDestructiveMigration` — schema
+Schema is at `version = 4` with `fallbackToDestructiveMigration` — schema
 edits wipe local state.
 
 JSON in fields like `topicLabels` is hand-rolled via small `parseJsonArray` /
@@ -218,6 +221,40 @@ From these signals it derives a 0–1 **addiction trend score** with
 `Low/Moderate/High` bands. This is intentionally separate from
 `manipulationScore` (which is per-session), so dashboards can show both
 "what this session looked like" and "how behavior is changing across sessions."
+
+---
+
+## Video segmentation & per-video grouping
+
+MediaProjection captures pixels but not touch events, and an overlay window
+cannot read touches that pass through to the app below it (Android forbids
+that — it's the tapjacking vector). So Pavlova uses two complementary signals:
+
+**1. Visual segmentation (`VideoSegmenter`, always on).** Infers scrolls from
+the frame:
+- A **scroll** translates the whole screen — a large full-frame difference
+  (16×16 downsampled luminance signature) *and* a coherent vertical row-shift
+  (row-profile cross-correlation).
+- A **tap / like / comment** barely changes the frame.
+- In-video motion / scene cuts change the centre but not the bottom row.
+
+A new video is declared when a *scroll-like* frame (big diff **or** clear
+vertical translation) coincides with a **bottom-band OCR text change**, gated
+by a short cooldown.
+
+**2. Accessibility scroll detection (`PavlovaAccessibilityService`, optional).**
+The only Android-sanctioned way to observe cross-app input. It subscribes to
+`TYPE_VIEW_SCROLLED` events only (with `canRetrieveWindowContent=false` — no
+text/coordinates/content), publishes a timestamp to `ScrollSignal`, and
+`FeedAnalyzer` passes a recent-scroll hint into `VideoSegmenter.update(...)`.
+This catches scrolls the visual heuristic might miss and raises confidence.
+Opt-in via Settings → Accessibility; capture works visually without it.
+
+Each boundary increments `FeedAnalyzer.currentVideoIndex`, written to every
+`ContentItem.videoIndex`. `CreatorDetector` is reset at each boundary so its
+per-video stability tracking and creator back-fill restart cleanly. The session
+detail screen groups captured frames (and thumbnails) by `videoIndex`, one
+header per video with the resolved creator and frame count.
 
 ---
 

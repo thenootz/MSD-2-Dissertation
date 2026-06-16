@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Minimal accessibility config for Pavlova's optional scroll detector.
+
+  We subscribe ONLY to scroll events across all apps and explicitly do NOT
+  retrieve window content — no text, coordinates, or screen content is read.
+  The service merely flags "a scroll happened" so the capture pipeline can
+  mark a new short-video boundary accurately.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeViewScrolled"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault"
+    android:canRetrieveWindowContent="false"
+    android:notificationTimeout="100"
+    android:description="@string/accessibility_service_description" />

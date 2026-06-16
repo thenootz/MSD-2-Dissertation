@@ -13,25 +13,20 @@ package com.pavlova.ml
  * The signal that **does** work cross-platform: while the user is watching a
  * single video, the bottom of the screen (the creator label and the music
  * row immediately below it) stays nearly identical across consecutive
- * captured frames, while the rest of the screen (caption, engagement
- * counts, gestures) churns. So we:
+ * captured frames. So within one video we:
  *
  *   1. On every frame, snapshot the cleaned, plausible candidate strings
  *      sitting in the bottom band.
- *   2. Detect **video-segment boundaries** by comparing the current frame's
- *      candidate set to the previous frame's. When overlap drops below
- *      [segmentBoundaryJaccard] we treat it as a scroll to a new video and
- *      start a fresh segment (history is cleared).
- *   3. Within a segment, score `(text, vertical band)` by sighting count.
- *      The first candidate that's seen in at least [minStableFrames] frames
- *      wins and stays locked for the rest of the segment, so [submit]
- *      keeps returning the same handle on every subsequent frame.
- *   4. [submit] returns a [Result] with both the resolved creator and the
- *      current `segmentId`, so the caller can back-fill earlier
- *      `ContentItem`s belonging to the same video.
+ *   2. Score `(text, vertical band)` by sighting count. The first candidate
+ *      seen in at least [minStableFrames] frames wins and stays locked, so
+ *      [submit] keeps returning the same handle for the rest of the video.
  *
- * State is per-instance; [FeedAnalyzer] creates a fresh detector per
- * session and calls [reset] when ending the session.
+ * Video **boundaries** are no longer this class's job — [VideoSegmenter]
+ * detects scrolls from the visual frame difference and [FeedAnalyzer] calls
+ * [reset] at each new video so creator tracking starts fresh.
+ *
+ * State is per-instance; [FeedAnalyzer] creates one detector per session and
+ * calls [reset] on every new video (and at session start).
  */
 class CreatorDetector(
     private val historyDepth: Int = 8,
@@ -39,31 +34,21 @@ class CreatorDetector(
     /** Vertical fraction below which we look for creator names. 0.55 = bottom 45 %. */
     private val bottomBandStart: Float = 0.55f,
     /** Skip the very bottom edge (system nav / app bottom-bar). */
-    private val bottomBandEnd: Float = 0.97f,
-    /**
-     * Jaccard similarity threshold between two consecutive frames' candidate
-     * bag. Below this we declare a new video segment and reset state. The
-     * default is permissive enough that one captured frame mid-video doesn't
-     * accidentally start a new segment just because the caption changed.
-     */
-    private val segmentBoundaryJaccard: Float = 0.34f
+    private val bottomBandEnd: Float = 0.97f
 ) {
-
-    /** Returned from [submit]. `creator` is null while the detector is still
-     *  gathering evidence for the current segment. `segmentId` increments
-     *  every time a video boundary is detected; callers can use it to know
-     *  which previously-stored items should share this creator. */
-    data class Result(val segmentId: Long, val creator: String?)
 
     private data class Sighting(val key: String, val exemplar: String, val band: Int, val hadAt: Boolean)
 
     private val history = ArrayDeque<List<Sighting>>()
-    private var previousKeys: Set<String> = emptySet()
-    private var segmentId: Long = 0L
     private var lockedCreator: String? = null
 
-    fun submit(blocks: List<OcrBlock>): Result {
-        // 1. Build this frame's candidates from the bottom band.
+    /**
+     * Feed the OCR blocks from the latest captured frame (of the current
+     * video). Returns the best-guess creator handle (without leading `@`) once
+     * there's enough stable evidence, or `null` while still gathering it.
+     */
+    fun submit(blocks: List<OcrBlock>): String? {
+        // Build this frame's candidates from the bottom band.
         val frame = blocks
             .filter { it.cy in bottomBandStart..bottomBandEnd }
             .mapNotNull { block ->
@@ -78,31 +63,15 @@ class CreatorDetector(
             }
             .distinctBy { it.key to it.band }
 
-        val keysNow = frame.mapTo(HashSet()) { it.key }
-
-        // 2. Detect a new-video boundary by comparing candidate bags.
-        if (previousKeys.isNotEmpty() && keysNow.isNotEmpty()) {
-            val sim = jaccard(previousKeys, keysNow)
-            if (sim < segmentBoundaryJaccard) {
-                segmentId += 1
-                history.clear()
-                lockedCreator = null
-            }
-        } else if (previousKeys.isNotEmpty() && keysNow.isEmpty()) {
-            // A frame with no candidate text in the bottom band (transition,
-            // black frame) doesn't change the segment, just skips evidence.
-        }
-        previousKeys = keysNow
-
         history.addLast(frame)
         while (history.size > historyDepth) history.removeFirst()
 
-        // 3. Once locked for this segment, stay locked.
-        lockedCreator?.let { return Result(segmentId, it) }
+        // Once locked for this video, stay locked.
+        lockedCreator?.let { return it }
 
-        if (history.size < minStableFrames) return Result(segmentId, null)
+        if (history.size < minStableFrames) return null
 
-        // 4. Score (text → hits, @-prefix count, band, exemplar) inside this segment only.
+        // Score (text → hits, @-prefix count, band, exemplar) within this video.
         data class Score(val hits: Int, val band: Int, val withAt: Int, val exemplar: String)
         val scores = HashMap<String, Score>()
         for (f in history) {
@@ -125,17 +94,15 @@ class CreatorDetector(
                     { it.value.withAt },
                     { it.value.band }
                 )
-            ) ?: return Result(segmentId, null)
+            ) ?: return null
 
         lockedCreator = best.value.exemplar
-        return Result(segmentId, lockedCreator)
+        return lockedCreator
     }
 
-    /** Reset all state. Call when a new audit session starts. */
+    /** Reset all state. Call when a new video starts (or the session begins). */
     fun reset() {
         history.clear()
-        previousKeys = emptySet()
-        segmentId = 0L
         lockedCreator = null
     }
 
@@ -169,14 +136,6 @@ class CreatorDetector(
     }
 
     private fun bandOf(cy: Float): Int = (cy * BAND_RESOLUTION).toInt()
-
-    private fun jaccard(a: Set<String>, b: Set<String>): Float {
-        if (a.isEmpty() && b.isEmpty()) return 1f
-        var intersection = 0
-        for (k in a) if (k in b) intersection++
-        val union = a.size + b.size - intersection
-        return if (union == 0) 0f else intersection / union.toFloat()
-    }
 
     companion object {
         private const val BAND_RESOLUTION = 20

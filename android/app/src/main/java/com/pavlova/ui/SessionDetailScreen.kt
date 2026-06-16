@@ -65,25 +65,36 @@ fun SessionDetailScreen(sessionId: String, db: PavlovaDatabase, onBack: () -> Un
             item {
                 SessionSummaryHeader(session, metrics, items)
             }
-            item {
-                Text(
-                    "${items.size} captured items",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(top = 8.dp)
-                )
-            }
             if (items.isEmpty()) {
                 item {
                     Text(
                         "No items captured for this session.",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp)
                     )
                 }
             } else {
-                items(items, key = { it.id }) { contentItem ->
-                    ContentItemRow(contentItem, onClick = { selectedItem = contentItem })
+                // Group captured frames by the video they belong to.
+                val byVideo = items.groupBy { it.videoIndex }
+                    .toSortedMap()
+
+                item {
+                    Text(
+                        "${byVideo.size} videos · ${items.size} captured frames",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
+
+                byVideo.forEach { (videoIndex, videoItems) ->
+                    item(key = "video_header_$videoIndex") {
+                        VideoGroupHeader(videoIndex, videoItems)
+                    }
+                    items(videoItems, key = { it.id }) { contentItem ->
+                        ContentItemRow(contentItem, onClick = { selectedItem = contentItem })
+                    }
                 }
             }
             item { Spacer(modifier = Modifier.height(16.dp)) }
@@ -92,6 +103,34 @@ fun SessionDetailScreen(sessionId: String, db: PavlovaDatabase, onBack: () -> Un
 
     selectedItem?.let { item ->
         ContentItemDetailDialog(item = item, onDismiss = { selectedItem = null })
+    }
+}
+
+@Composable
+private fun VideoGroupHeader(videoIndex: Int, videoItems: List<ContentItem>) {
+    // Most common non-null creator within this video group.
+    val creator = videoItems.mapNotNull { it.creatorId?.trim()?.takeIf(String::isNotBlank) }
+        .groupingBy { it }.eachCount()
+        .maxByOrNull { it.value }?.key
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 12.dp, bottom = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            "Video ${videoIndex + 1}" + (creator?.let { " · @$it" } ?: ""),
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Text(
+            "${videoItems.size} ${if (videoItems.size == 1) "frame" else "frames"}",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 

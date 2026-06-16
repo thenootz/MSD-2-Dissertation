@@ -30,6 +30,7 @@ import com.pavlova.data.database.PavlovaDatabase
 import com.pavlova.data.model.FeedSession
 import com.pavlova.data.model.SessionMetrics
 import com.pavlova.permissions.PermissionManager
+import com.pavlova.services.CaptureState
 import com.pavlova.services.ScreenCaptureService
 import com.pavlova.ui.DebugCapturesScreen
 import com.pavlova.ui.SessionDetailScreen
@@ -156,7 +157,9 @@ fun DashboardScreen(
     permissionManager: PermissionManager,
     db: PavlovaDatabase
 ) {
-    var isAuditing by remember { mutableStateOf(false) }
+    // Capture state is owned by the service so the button reflects reality even
+    // when the screen share is ended from the system UI.
+    val isAuditing by CaptureState.isCapturing.collectAsState()
     val verboseMode by AppSettings.verboseModeFlow.collectAsState()
     val alertsEnabled by AppSettings.alertsEnabledFlow.collectAsState()
 
@@ -220,8 +223,8 @@ fun DashboardScreen(
         item {
             Button(
                 onClick = {
-                    if (isAuditing) { onStopAudit(); isAuditing = false }
-                    else { onStartAudit(); isAuditing = true }
+                    // State flips via CaptureState once the service starts/stops.
+                    if (isAuditing) onStopAudit() else onStartAudit()
                 },
                 modifier = Modifier.fillMaxWidth().height(56.dp),
                 colors = if (isAuditing) ButtonDefaults.buttonColors(

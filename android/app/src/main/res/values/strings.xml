@@ -27,8 +27,8 @@
     <string name="notification_text">Protecting your screen content</string>
     
     <!-- Accessibility Service -->
-    <string name="accessibility_service_name">Pavlova Context Service</string>
-    <string name="accessibility_service_description">Provides app context for content filtering (optional). Only tracks which app is in foreground, no input monitoring.</string>
+    <string name="accessibility_service_name">Pavlova Scroll Detector</string>
+    <string name="accessibility_service_description">Lets Pavlova detect when you scroll to the next short video so it can group captured frames per video. It only reads scroll events — no text, taps, coordinates, or screen content. Optional; the audit works without it.</string>
     
     <!-- Settings -->
     <string name="settings_title">Settings</string>

@@ -51,6 +51,20 @@
             android:foregroundServiceType="mediaProjection"
             android:stopWithTask="false" />
 
+        <!-- Optional accessibility service: detects scroll-to-next-video events -->
+        <service
+            android:name=".services.PavlovaAccessibilityService"
+            android:exported="false"
+            android:label="@string/accessibility_service_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
         <!-- File Provider for sharing logs/exports -->
         <provider
             android:name="androidx.core.content.FileProvider"

@@ -32,6 +32,14 @@ data class ContentItem(
     /** Position in the feed (order seen) */
     val position: Int = 0,
 
+    /**
+     * Index of the video this frame belongs to within its session (0-based).
+     * Consecutive frames of the same short video share a videoIndex; it
+     * increments when [com.pavlova.ml.VideoSegmenter] detects a scroll to the
+     * next video. Used to group captured frames/screenshots per video.
+     */
+    val videoIndex: Int = 0,
+
     /** OCR-extracted text (captions, hashtags, overlays) */
     val textContent: String? = null,
 

@@ -15,7 +15,7 @@ import net.sqlcipher.database.SupportFactory
 
 @Database(
     entities = [FeedSession::class, ContentItem::class, SessionMetrics::class],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class PavlovaDatabase : RoomDatabase() {

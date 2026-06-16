@@ -15,6 +15,7 @@ import com.pavlova.data.model.ContentItem
 import com.pavlova.data.model.FeedSession
 import com.pavlova.debug.DebugCaptureStore
 import com.pavlova.overlay.OverlayManager
+import com.pavlova.services.ScrollSignal
 import kotlinx.coroutines.*
 
 /**
@@ -29,6 +30,7 @@ class FeedAnalyzer(context: Context) {
         private const val TAG = "FeedAnalyzer"
         private const val METRICS_INTERVAL = 10 // Recompute metrics every N items
         private const val ALERT_COOLDOWN_MS = 45_000L // Don't repeat the same alert too often
+        private const val SCROLL_HINT_WINDOW_MS = 1_200L // Treat a11y scrolls within this window as recent
     }
 
     private val db = PavlovaDatabase.getDatabase(context)
@@ -44,15 +46,18 @@ class FeedAnalyzer(context: Context) {
     private var itemPosition = 0
     private var lastFrameHash = 0
     private val creatorDetector = CreatorDetector()
+    private val videoSegmenter = VideoSegmenter()
 
     /** Last time each alert type was shown, for per-type cooldown. */
     private val lastAlertAt = mutableMapOf<String, Long>()
 
-    /** Row IDs of ContentItems we've inserted for the current video segment,
-     *  so we can back-fill `creatorId` once the detector resolves it. */
-    private val currentSegmentRowIds = mutableListOf<Long>()
-    private var currentSegmentId: Long = -1L
-    private var currentSegmentCreator: String? = null
+    // --- Per-video grouping state ---------------------------------------
+    /** 0-based index of the video currently being watched (−1 before first). */
+    private var currentVideoIndex = -1
+    /** Row IDs inserted for the current video, so we can back-fill creatorId. */
+    private val currentVideoRowIds = mutableListOf<Long>()
+    /** Resolved creator for the current video, once the detector locks in. */
+    private var currentVideoCreator: String? = null
 
     /**
      * Start a new auditing session.
@@ -64,9 +69,10 @@ class FeedAnalyzer(context: Context) {
         itemPosition = 0
         lastFrameHash = 0
         creatorDetector.reset()
-        currentSegmentRowIds.clear()
-        currentSegmentId = -1L
-        currentSegmentCreator = null
+        videoSegmenter.reset()
+        currentVideoIndex = -1
+        currentVideoRowIds.clear()
+        currentVideoCreator = null
         Log.d(TAG, "Session started: ${session.id}")
         return session
     }
@@ -111,34 +117,50 @@ class FeedAnalyzer(context: Context) {
 
             val analysis = ContentAnalyzer.analyzeText(ocr.fullText)
 
-            // Resolve creator using the per-segment tracker. Three cases:
-            //   - new segmentId  → flush previous segment's rows; record this one.
-            //   - same segment, locked creator    → use it.
-            //   - same segment, not yet resolved  → store null; we'll back-fill
-            //     onto this row once the detector locks in.
-            val detection = creatorDetector.submit(ocr.blocks)
-            if (detection.segmentId != currentSegmentId) {
-                // Scrolled to a new video. The previous segment's rows are
-                // already populated with whatever creator we knew at the time
-                // of each insert — no further action needed for them.
-                currentSegmentId = detection.segmentId
-                currentSegmentRowIds.clear()
-                currentSegmentCreator = detection.creator
-            } else if (detection.creator != null && currentSegmentCreator == null) {
-                // The detector just resolved the creator for this segment.
-                // Back-fill every row we've already inserted for it.
-                currentSegmentCreator = detection.creator
-                if (currentSegmentRowIds.isNotEmpty()) {
-                    contentDao.updateCreatorForIds(currentSegmentRowIds.toList(), detection.creator)
-                    Log.d(TAG, "Back-filled creator='${detection.creator}' on ${currentSegmentRowIds.size} items (segment=${detection.segmentId})")
+            // --- Video segmentation from scroll behaviour -----------------
+            // A scroll to the next video produces a large full-frame change,
+            // while a tap/like/comment barely changes the frame. Combined with
+            // a bottom-band text change (rejects in-video scene cuts), this
+            // tells us when a new short video begins.
+            val bottomKeys = ocr.blocks
+                .filter { it.cy in 0.55f..0.97f }
+                .map { it.text.lowercase().trim() }
+                .filter { it.isNotEmpty() }
+                .toSet()
+            val signature = VideoSegmenter.signatureFromRgba(imageData, width, height)
+            // Fuse the visual segmenter with the optional accessibility scroll
+            // detector: if a real scroll was observed in the last ~1.2s, treat
+            // this frame as scroll-like (the bottom-band guard + cooldown still
+            // prevent a single fling from producing multiple boundaries).
+            val a11yScrollRecent = ScrollSignal.isActive() &&
+                ScrollSignal.millisSinceLastScroll() < SCROLL_HINT_WINDOW_MS
+            val isNewVideo = videoSegmenter.update(signature, bottomKeys, a11yScrollRecent)
+            if (isNewVideo) {
+                currentVideoIndex += 1
+                currentVideoRowIds.clear()
+                currentVideoCreator = null
+                creatorDetector.reset()
+                Log.d(TAG, "New video #$currentVideoIndex (frameDiff=${"%.3f".format(videoSegmenter.lastFrameDiff)}, " +
+                        "vShift=${videoSegmenter.lastVerticalShift}, a11y=$a11yScrollRecent)")
+            }
+
+            // Resolve the creator for the current video (stable across frames).
+            val detectedCreator = creatorDetector.submit(ocr.blocks)
+            if (detectedCreator != null && currentVideoCreator == null) {
+                // Detector just locked in — back-fill earlier frames of this video.
+                currentVideoCreator = detectedCreator
+                if (currentVideoRowIds.isNotEmpty()) {
+                    contentDao.updateCreatorForIds(currentVideoRowIds.toList(), detectedCreator)
+                    Log.d(TAG, "Back-filled creator='$detectedCreator' on ${currentVideoRowIds.size} items (video #$currentVideoIndex)")
                 }
             }
-            val creator = currentSegmentCreator ?: analysis.creatorId
+            val creator = currentVideoCreator ?: detectedCreator ?: analysis.creatorId
 
-            // Store as ContentItem
+            // Store as ContentItem, tagged with its video index.
             val item = ContentItem(
                 sessionId = session.id,
                 position = itemPosition++,
+                videoIndex = currentVideoIndex,
                 textContent = analysis.extractedText,
                 creatorId = creator,
                 topicLabels = analysis.topicsAsJson(),
@@ -148,7 +170,7 @@ class FeedAnalyzer(context: Context) {
                 persuasionScore = analysis.persuasionScore
             )
             val rowId = contentDao.insert(item)
-            currentSegmentRowIds.add(rowId)
+            currentVideoRowIds.add(rowId)
 
             // Verbose/demo mode: persist a downscaled thumbnail of the frame so
             // the session detail screen can render previews. In default

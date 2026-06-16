@@ -22,6 +22,7 @@ import com.pavlova.data.AppSettings
 import com.pavlova.data.ScreenshotStore
 import com.pavlova.data.database.PavlovaDatabase
 import com.pavlova.debug.DebugCaptureStore
+import com.pavlova.services.ScrollSignal
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -43,6 +44,7 @@ fun SettingsScreen(
 
     // Re-read overlay permission when returning from the system settings screen.
     var canDrawOverlays by remember { mutableStateOf(hasOverlayPermission(context)) }
+    var scrollDetectorOn by remember { mutableStateOf(ScrollSignal.isActive()) }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -52,6 +54,7 @@ fun SettingsScreen(
                     scope.launch { snackbarHost.showSnackbar("Overlay permission granted — alerts are active") }
                 }
                 canDrawOverlays = granted
+                scrollDetectorOn = ScrollSignal.isActive()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -155,6 +158,49 @@ fun SettingsScreen(
                         Button(onClick = { requestOverlayPermission(context) }) {
                             Text("Grant permission")
                         }
+                    }
+                }
+            }
+
+            Divider()
+
+            Text(
+                "Video detection",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "Scroll detection (Accessibility)",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            if (scrollDetectorOn) "Active" else "Off",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (scrollDetectorOn) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "Lets Pavlova know exactly when you swipe to the next " +
+                            "video, so captured frames are grouped per video more " +
+                            "accurately. Reads only scroll events — no taps, text, " +
+                            "or screen content. Optional; detection still works " +
+                            "without it (visually).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(onClick = { openAccessibilitySettings(context) }) {
+                        Text(if (scrollDetectorOn) "Manage in Accessibility" else "Enable in Accessibility")
                     }
                 }
             }
@@ -274,6 +320,12 @@ private fun requestOverlayPermission(context: Context) {
         ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)
     }
+}
+
+private fun openAccessibilitySettings(context: Context) {
+    val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    context.startActivity(intent)
 }
 
 /**

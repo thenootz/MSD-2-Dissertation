@@ -111,8 +111,12 @@ class ScreenCaptureService : Service() {
             // Fix: Register a callback before creating VirtualDisplay (required on Android 14+)
             mediaProjection?.registerCallback(object : MediaProjection.Callback() {
                 override fun onStop() {
-                    Log.d(TAG, "MediaProjection stopped")
-                    stopCapture()
+                    // Fired when the user ends the screen share from the system
+                    // UI (cast notification / "Stop sharing"). Tear everything
+                    // down and bring Pavlova back to the foreground so the
+                    // session is cleanly closed and visible.
+                    Log.d(TAG, "MediaProjection stopped by system/user")
+                    onProjectionEnded()
                 }
             }, null)
             
@@ -141,12 +145,13 @@ class ScreenCaptureService : Service() {
             )
             
             isCapturing.set(true)
-            
+            CaptureState.setCapturing(true)
+
             // Start an auditing session
             serviceScope.launch {
                 feedAnalyzer?.startSession()
             }
-            
+
             Log.d(TAG, "Screen capture started successfully")
             
         } catch (e: Exception) {
@@ -214,6 +219,35 @@ class ScreenCaptureService : Service() {
         }
     }
 
+    /**
+     * Called when the screen share ends from outside the app (the system
+     * "Stop sharing" affordance fires [MediaProjection.Callback.onStop]).
+     * Fully stops the service (which ends the audit session via [onDestroy])
+     * and relaunches Pavlova so the user lands back on the dashboard.
+     */
+    private fun onProjectionEnded() {
+        stopCapture()
+        reopenApp()
+        // stopSelf() → onDestroy() ends the session, closes the analyzer, and
+        // clears CaptureState so the dashboard button flips to "Start".
+        stopSelf()
+    }
+
+    /** Bring the Pavlova dashboard back to the foreground. */
+    private fun reopenApp() {
+        try {
+            val intent = Intent(this, MainActivity::class.java).apply {
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                )
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to reopen app after projection end", e)
+        }
+    }
+
     private fun stopCapture() {
         if (!isCapturing.getAndSet(false)) {
             return
@@ -239,17 +273,19 @@ class ScreenCaptureService : Service() {
 
     override fun onDestroy() {
         Log.d(TAG, "Service destroyed")
-        
+
+        CaptureState.setCapturing(false)
+
         // End the auditing session
         runBlocking {
             feedAnalyzer?.endSession()
         }
         feedAnalyzer?.destroy()
-        
+
         stopCapture()
-        
+
         serviceScope.cancel()
-        
+
         super.onDestroy()
     }
 
