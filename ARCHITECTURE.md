@@ -1,103 +1,603 @@
-# Pavlova — Architecture
+# Pavlova — Architecture & Implementation Details
 
-> **"Explainable AI Framework for Auditing Algorithmic Manipulation in Social Media Recommendation Systems"**
+> **Explainable AI Framework for Auditing Algorithmic Manipulation in Social Media Recommendation Systems**
 
-This document describes the **current** architecture of the Android app. The
-original phased pivot plan that drove the rewrite from the NSFW-filter
-prototype to the auditing tool is preserved in
-[Appendix A — Pivot plan (historical)](#appendix-a--pivot-plan-historical)
-for context.
+This document describes the **current** architecture of the Pavlova Android app, including the full runtime pipeline, package layout, key design patterns, and implementation status.
 
 ---
 
-## High-level overview
+## High-Level Overview
+
+Pavlova is a **single-activity Compose application** that runs a continuous background service to capture social media feed screens, analyze them for manipulation patterns, and alert the user in real-time — all without sending any data to the cloud.
 
 ```
-┌────────────────────────────────────────────────────────────────────┐
-│                       PAVLOVA ANDROID APP                          │
-│                                                                    │
-│  UI (Compose, single-activity, 4 routes)                           │
-│  ├─ DashboardScreen      audit start/stop, sessions, latest score │
-│  ├─ SessionDetailScreen  per-item rows + (optional) thumbnails    │
-│  ├─ SettingsScreen       verbose / demo + debug capture toggles   │
-│  └─ DebugCapturesScreen  raw frame + OCR text log (developer)     │
-│                                                                    │
-│  Analysis engine                                                   │
-│  ├─ DriftAnalyzer        entropy / Gini / escalation              │
-│  ├─ MarkovChainAnalyzer  topic transition matrix + funnel finder  │
-│  ├─ SequenceAnalyzer     LSTM (TFLite) or statistical fallback    │
-│  ├─ IsolationForest      pure-Kotlin anomaly detector             │
-│  ├─ ManipulationDetector 10-indicator weighted score              │
-│  ├─ SessionTrendAnalyzer cross-session behavior trend detection   │
-│  └─ ShapExplainer        permutation-importance human summaries   │
-│                                                                    │
-│  Content understanding                                             │
-│  ├─ TextExtractor        ML Kit OCR                               │
-│  ├─ NlpModelRunner       RoBERTa sentiment / toxicity (TFLite)    │
-│  ├─ EmbeddingEngine      SBERT MiniLM embeddings (TFLite)         │
-│  ├─ Tokenizer            BPE / WordPiece / hash fallback          │
-│  ├─ VideoSegmenter       scroll-vs-tap video boundary detection   │
-│  ├─ CreatorDetector      per-video creator tracking + back-fill   │
-│  └─ ContentAnalyzer      orchestrates everything above            │
-│                                                                    │
-│  Capture                                                           │
-│  └─ ScreenCaptureService MediaProjection @ ~2 FPS, frame dedup    │
-│                                                                    │
-│  Data                                                              │
-│  ├─ Room + SQLCipher     FeedSession, ContentItem, SessionMetrics │
-│  ├─ ScreenshotStore      thumbnails (verbose mode only)           │
-│  └─ AppSettings          SharedPreferences (verboseMode flag)     │
-└────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                       PAVLOVA APPLICATION                       │
+│                                                                 │
+│  ┌─ CAPTURE LAYER ───────────────────────────────────────────┐  │
+│  │ ScreenCaptureService (MediaProjection ~2 FPS)             │  │
+│  │ └─ Frame deduplication (contentHashCode)                  │  │
+│  │ └─ Raw RGBA bytes → FeedAnalyzer                          │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                                ↓                                │
+│  ┌─ ANALYSIS LAYER ──────────────────────────────────────────┐  │
+│  │ FeedAnalyzer (orchestrator)                               │  │
+│  │ ├─ TextExtractor (ML Kit OCR)                             │  │
+│  │ ├─ ContentAnalyzer (NLP pipeline)                         │  │
+│  │ │  ├─ NlpModelRunner (sentiment/toxicity TFLite)          │  │
+│  │ │  ├─ EmbeddingEngine (SBERT embeddings TFLite)           │  │
+│  │ │  └─ Tokenizer abstraction (BPE/WordPiece/Hash)          │  │
+│  │ ├─ VideoSegmenter (scroll detection)                      │  │
+│  │ ├─ CreatorDetector (per-video creator tracking)           │  │
+│  │ └─ Room persistence (ContentItem)                         │  │
+│  │                                                           │  │
+│  │ ManipulationDetector (every ~10 items)                    │  │
+│  │ ├─ DriftAnalyzer (entropy, Gini, escalation)              │  │
+│  │ ├─ MarkovChainAnalyzer (topic transitions)                │  │
+│  │ ├─ SequenceAnalyzer (LSTM or statistical)                 │  │
+│  │ ├─ IsolationForest (anomaly scoring)                      │  │
+│  │ └─ SessionMetrics → FeedAlerts → OverlayManager           │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                                ↓                                │
+│  ┌─ UI & PERSISTENCE ────────────────────────────────────────┐  │
+│  │ Compose Dashboard (4 routes)                              │  │
+│  │ ├─ DashboardScreen (audit start, sessions, scores)        │  │
+│  │ ├─ SessionDetailScreen (per-item rows, screenshots)       │  │
+│  │ ├─ SettingsScreen (permissions, verbosity, alerts)        │  │
+│  │ └─ DebugCapturesScreen (frame + OCR text log)             │  │
+│  │                                                           │  │
+│  │ Room + SQLCipher (encrypted DB)                           │  │
+│  │ ├─ FeedSession, ContentItem, SessionMetrics               │  │
+│  │ ├─ ScreenshotStore (opt-in verbose mode)                  │  │
+│  │ └─ AppSettings (SharedPreferences)                        │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                                ↓                                │
+│  ┌─ ALERTS ──────────────────────────────────────────────────┐  │
+│  │ OverlayManager (TYPE_APPLICATION_OVERLAY)                 │  │
+│  │ └─ Auto-dismissing wellbeing banners                      │  │
+│  │ OR AlertNotifier (system notifications)                   │  │
+│  └───────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
 ```
-
-No network calls. All inference runs on-device.
 
 ---
 
-## Runtime pipeline
+## Runtime Pipeline
 
-```
-ScreenCaptureService (MediaProjection, ~2 FPS, dedupe by content hash)
-  → FeedAnalyzer.processFrame(bytes, w, h)
-      → TextExtractor.bitmapFromRgba / extractStructured (ML Kit OCR + line boxes)
-      → ContentAnalyzer.analyzeText
-            sentiment       (RoBERTa TFLite or keyword fallback)
-            toxicity        (RoBERTa TFLite or keyword fallback)
-            topics          (keyword)
-            emotion         (keyword)
-            persuasion      (keyword)
-            embedding       (SBERT TFLite or hash fallback)
-      → VideoSegmenter.update(frameSignature, bottomBandText, a11yScrollHint)
-            scroll detected (frame diff / vertical shift / accessibility scroll)
-            + bottom-band change ⇒ new videoIndex
-      → CreatorDetector.submit(ocrBlocks)
-            creator lock per video; DB back-fill for early frames
-      → ContentItem persisted in Room (tagged with videoIndex)
-      → if verboseMode: ScreenshotStore.save() + ContentItem.update(path)
-      → DebugCaptureStore.save()  (no-op when disabled)
-      → every 10 items: ManipulationDetector.analyze() → SessionMetrics
-            → FeedAlerts.evaluate → OverlayManager banner (if thresholds crossed)
-      → Dashboard longitudinal pass: SessionTrendAnalyzer over completed sessions
-  → Compose UI collects sessions + metrics via Flow
+### Initialization (PavlovaApplication.onCreate)
+
+Singletons are initialized in strict dependency order:
+
+```kotlin
+AppSettings                    // Shared preferences
+  ↓
+ScreenshotStore               // Verbose mode screenshot storage
+  ↓
+DebugCaptureStore             // Pipeline debugging store
+  ↓
+ContentAnalyzer               // Singleton holding TFLite interpreters
+  ├─ TextExtractor
+  ├─ NlpModelRunner (sentiment, toxicity models)
+  └─ EmbeddingEngine (SBERT model, reused by ManipulationDetector)
+  ↓
+ManipulationDetector          // Reuses ContentAnalyzer's EmbeddingEngine
+  ├─ DriftAnalyzer
+  ├─ MarkovChainAnalyzer
+  ├─ SequenceAnalyzer
+  └─ IsolationForest
 ```
 
-`PavlovaApplication.onCreate()` initialises singletons in this order so
-later ones can read the earlier ones safely:
+**Critical**: `ManipulationDetector` explicitly reuses the SBERT `EmbeddingEngine` owned by `ContentAnalyzer` to avoid loading `sbert_quantized.tflite` twice in memory.
+
+Both `ContentAnalyzer` and `ManipulationDetector` are closed in `PavlovaApplication.onTerminate()` and `ScreenCaptureService.onDestroy()` to free TFLite interpreter handles.
+
+### Per-Frame Processing
+
+Each frame captured by `ScreenCaptureService` flows through this pipeline:
 
 ```
-AppSettings → ScreenshotStore → DebugCaptureStore → ContentAnalyzer → ManipulationDetector
+ScreenCaptureService.onImageAvailable(reader: ImageReader)
+  ├─ Extract RGBA bytes (w × h × 4 bytes)
+  ├─ Compute contentHashCode(); skip if == last frame hash
+  ├─ FeedAnalyzer.processFrame(bytes, width, height, timestamp)
+  │   │
+  │   ├─ TextExtractor.bitmapFromRgba() + ML Kit OCR
+  │   │   └─ Extract text + bounding boxes per line
+  │   │
+  │   ├─ ContentAnalyzer.analyzeText(ocrText, ocrBlocks)
+  │   │   ├─ NlpModelRunner.sentiment (RoBERTa or keyword fallback)
+  │   │   ├─ NlpModelRunner.toxicity (RoBERTa or keyword fallback)
+  │   │   ├─ Keyword heuristics: topics, emotion, persuasion
+  │   │   └─ EmbeddingEngine.embed() (SBERT or hash fallback)
+  │   │   └─ Returns: ContentAnalysis (all scores + embedding)
+  │   │
+  │   ├─ VideoSegmenter.update(frameSignature, bottomBandText)
+  │   │   ├─ Detect scroll: frame-diff luminance + vertical shift
+  │   │   └─ If scroll || bottom-band text change ⇒ new videoIndex++
+  │   │
+  │   ├─ CreatorDetector.submit(ocrBlocks)
+  │   │   ├─ Plausibility filter (@-prefix, length)
+  │   │   └─ Lock creator per videoIndex
+  │   │   └─ FeedAnalyzer back-fills creatorId onto earlier frames
+  │   │
+  │   ├─ Persist ContentItem to Room (FeedSession FK, videoIndex, scores, etc.)
+  │   │
+  │   ├─ ScreenshotStore.save() if AppSettings.verboseMode
+  │   │   └─ Downscaled JPEG (~480px, quality 70) to <filesDir>/captures/
+  │   │
+  │   ├─ DebugCaptureStore.save() (no-op if disabled)
+  │   │
+  │   └─ Every 10 items: ManipulationDetector.analyze()
+  │       ├─ Collect ContentItems for current session
+  │       ├─ DriftAnalyzer.compute() (entropy, Gini, escalation slope)
+  │       ├─ MarkovChainAnalyzer.analyzeTopic() (transitions, funnels)
+  │       ├─ SequenceAnalyzer.detectEscalation() (LSTM or statistical)
+  │       ├─ IsolationForest.score() (anomaly score)
+  │       ├─ ManipulationDetector.computeManipulationScore()
+  │       │   └─ 10 indicators: sentiment, toxicity, topic drift,
+  │       │      embedding isolation, creator repetition, screen time, etc.
+  │       ├─ Persist SessionMetrics to Room
+  │       │
+  │       ├─ FeedAlerts.evaluate(sessionContext)
+  │       │   ├─ Metric-based: toxicity > 0.7, isolation > 0.6, etc.
+  │       │   ├─ Behavior-based: screen time milestones (5/15/30/45/60 min),
+  │       │   │   session > average, repeated creator, binge volume
+  │       │   └─ Return Alert with severity + message
+  │       │
+  │       └─ OverlayManager.show(alert) or AlertNotifier.notify()
+  │           └─ Display wellbeing warning (banner or notification)
+  │
+  └─ Return (async, non-blocking)
 ```
 
-`ManipulationDetector.initialize` reuses the SBERT `EmbeddingEngine` owned
-by `ContentAnalyzer` so the model file isn't memory-mapped twice.
+### UI Collection & Display
+
+The Compose UI collects data via Room DAOs as `Flow`s:
+
+```kotlin
+// DashboardScreen.kt
+val sessions = FeedSessionDao.getAllSessionsFlow()     // Flow<List<FeedSession>>
+val latestMetrics = SessionMetricsDao.getLatestFlow()  // Flow<SessionMetrics?>
+val captureActive = CaptureState.collectAsState()      // Flow<Boolean>
+
+// SessionDetailScreen collects ContentItems for a session
+val items = ContentItemDao.getBySessionIdFlow()        // Flow<List<ContentItem>>
+```
+
+These are rendered in real-time as the analysis engine emits new data.
 
 ---
 
-## Package layout
+## Package Layout
 
-`app/src/main/java/com/pavlova/`
+`android/app/src/main/java/com/pavlova/`
 
-| Package | Files | Role |
+### `services/`
+
+**ScreenCaptureService.kt**
+- Foreground service owning `MediaProjection`, `VirtualDisplay`, `ImageReader`.
+- Runs on a background coroutine; acquires the display every `1000/TARGET_FPS` ms (~500 ms for 2 FPS).
+- Deduplicates frames by `imageData.contentHashCode()`.
+- Publishes run state to `CaptureState` (a `StateFlow<Boolean>` observed by the dashboard).
+- Handled: `MediaProjection.Callback.onStop()` when the user dismisses screen-share from system UI — tears down service and relaunches `MainActivity`.
+
+**PavlovaAccessibilityService.kt**
+- Optional, opt-in. Subscribes to `TYPE_VIEW_SCROLLED` events.
+- Detects real scroll input (touch-based scrolling) that an overlay window can't observe.
+- Publishes timestamp to `ScrollSignal` (a `@Volatile` bridge).
+- Fused by `VideoSegmenter` with visual scroll detection; never required for operation.
+
+**CaptureState & ScrollSignal**
+- `CaptureState`: A `StateFlow<Boolean>` indicating whether screen capture is active. Observed by the dashboard to show "● Auditing in progress".
+- `ScrollSignal`: A `@Volatile var timestamp: Long`. Updated by accessibility service; polled by `VideoSegmenter` to refine scroll detection.
+
+### `ml/`
+
+**TextExtractor.kt**
+- Wraps Google ML Kit text recognition.
+- Input: RGBA byte array (w × h × 4).
+- Output: `StructuredText` (list of OCR blocks with text, bounding box, confidence).
+
+**ContentAnalyzer.kt** (singleton)
+- Orchestrates the content understanding pipeline.
+- Owns the single shared `EmbeddingEngine` instance (reused by `ManipulationDetector`).
+- `analyze(ocrText: String, ocrBlocks: List<OcrBlock>): ContentAnalysis`
+  - Runs sentiment via `NlpModelRunner` (or keyword fallback if model unavailable).
+  - Runs toxicity via `NlpModelRunner` (or keyword fallback).
+  - Runs topic, emotion, persuasion via keyword heuristics.
+  - Runs embedding via `EmbeddingEngine` (or hash fallback).
+  - Returns: `ContentAnalysis` with all scores + 384-dim embedding vector.
+
+**NlpModelRunner.kt**
+- Generic TFLite classifier wrapper.
+- Shared by sentiment and toxicity models (both use RoBERTa + BPE tokenizer).
+- `load(context, modelPath, tokenizer): Boolean` — returns whether model was successfully loaded.
+- `isAvailable: Boolean` — indicates whether inference is available.
+- `classify(text: String, labels: List<String>): Map<String, Float>` — returns logit scores per label.
+- On TFLite error: logs exception, sets `isAvailable = false`, caller falls back to keyword heuristic.
+
+**EmbeddingEngine.kt** (singleton, reused by ManipulationDetector)
+- Wraps SBERT MiniLM TFLite model for 384-dimensional embeddings.
+- Shared tokenizer; uses same `Tokenizer` abstraction as NLP models.
+- `embed(text: String): FloatArray` — returns 384-dim vector (or zeros if model unavailable).
+- Provides utility methods:
+  - `cosineSimilarity(a, b)` — similarity between two embeddings.
+  - `kMeans(embeddings, k)` — clustering.
+  - `averagePairwiseDistance(embeddings)` — embedding isolation / diversity metric.
+
+**Tokenizer.kt** (abstraction + 3 implementations)
+- Static factory: `Tokenizer.load(context, modelStem, fallbackVocabSize): Tokenizer`
+- Looks for vocab assets:
+  - RoBERTa (BPE): `<stem>_vocab.json`, `<stem>_merges.txt` → `BpeTokenizer`
+  - SBERT (WordPiece): `<stem>_vocab.txt` → `WordPieceTokenizer`
+  - Fallback: `HashTokenizer` (deterministic hash into vocab range)
+- Every implementation has `tokenize(text): IntArray` and `encode(tokens): ByteArray`.
+
+**VideoSegmenter.kt**
+- Detects video boundaries (transitions between short videos in a feed).
+- Visual signal: scroll produces large full-frame luminance diff (16×16 signature) + vertical row-shift; tap does not.
+- Bottom-band OCR text change (caption, metadata) indicates a new video.
+- Optional real scroll signal from `ScrollSignal` (accessibility service).
+- Increments `videoIndex` when scroll detected or bottom-band changes.
+- State: `currentVideoIndex: Int` (incremented, never reset per session).
+
+**CreatorDetector.kt**
+- Extracts creator handle from bottom-band OCR text.
+- Plausibility filter: length check, @-prefix preference.
+- Cross-frame stability: locks creator for the current `videoIndex`.
+- `FeedAnalyzer` back-fills the locked `creatorId` onto earlier frames of the same video.
+- Resets when `VideoSegmenter` detects a new video.
+
+**FeedAnalyzer.kt**
+- Per-session orchestrator.
+- Manages `FeedSession` lifecycle (start on capture begin, end on capture stop).
+- `processFrame(bytes, width, height, timestamp)`: runs the full per-frame pipeline above.
+- Triggers `DebugCaptureStore` unconditionally (no-op when disabled).
+- Triggers `ScreenshotStore` only when `AppSettings.verboseMode` is true.
+- Batches every 10 items and calls `ManipulationDetector.analyze()`.
+
+### `analysis/`
+
+All components are pure Kotlin except `SequenceAnalyzer` (which can defer to heuristics).
+
+**DriftAnalyzer.kt**
+- Stateless utility functions for feed-level metrics.
+- `computeEntropy(topics)` — Shannon entropy of topic distribution.
+- `computeGini(scores)` — Gini coefficient (concentration inequality).
+- `emotionalEscalationSlope(emotionScores, windowSize)` — linear regression slope of emotion trends.
+- `contentVelocity(itemCount, elapsedMs)` — items per minute.
+
+**MarkovChainAnalyzer.kt**
+- Builds a topic transition matrix from session's content items.
+- `analyzeTopic(items): TopicTransitionResult`
+  - Returns: `transitionMatrix`, `entropyOfTransitions`, `trendingTopics`, `funnelPath`.
+  - Funnel detection: identifies a pathological sequence (e.g., "news" → "politics" → "extremism") where each step increases escalation risk.
+
+**SequenceAnalyzer.kt**
+- Detects temporal escalation patterns (e.g., increasing toxicity or emotional intensity over time).
+- If LSTM model is available: loads `sequence_lstm.tflite` and runs inference on sliding windows of 10-item feature sequences.
+- Fallback: sliding-window linear regression + statistical thresholding.
+- `detectEscalation(items, windowSize): EscalationScore` — returns 0–1 confidence.
+
+**IsolationForest.kt**
+- Pure-Kotlin anomaly detector trained incrementally on session feature vectors.
+- `fit(historicalFeatures: List<FloatArray>)` — trains on past sessions' feature vectors.
+- `score(features: FloatArray): Float` — returns 0–1 anomaly score for a new session.
+- Used by `ManipulationDetector` to flag sessions with unusual feature combinations.
+
+**ManipulationDetector.kt** (singleton)
+- Combines all analysis engines into a 10-indicator manipulation score.
+- `analyze(sessionId, items): SessionMetrics`
+  - **Indicators**: sentiment spread, toxicity average, topic drift entropy, embedding isolation, creator repetition, screen time (flag if > 30 min), content velocity, behavioral escalation, anomaly score, feedback loops.
+  - **Weights**: hardcoded per indicator (all sum to 1.0).
+  - **Result**: `manipulationScore: Float` (0–1) stored in `SessionMetrics`.
+- Publishes to Room; also fires `FeedAlerts` to trigger overlay/notification warnings.
+
+**SessionTrendAnalyzer.kt**
+- Cross-session trend detection (e.g., user increasingly exposed to toxicity over multiple sessions).
+- `analyzeTrends(sessionsHistory): SessionTrendMetrics`
+  - Returns: trend direction (up/flat/down), velocity, risk trajectory.
+
+**ShapExplainer.kt**
+- SHAP-style permutation importance for a `SessionMetrics`.
+- For each indicator, permute its value and re-score the manipulation risk.
+- Generate human-readable explanations: *"Flagged because: topic escalation detected (60% impact), high toxicity exposure (25% impact), …"*.
+- Used by `SessionDetailScreen` to show explainability cards.
+
+**Visualization.kt**
+- `UmapProjector` — force-directed 2D projection of session embeddings (approximates UMAP).
+- `ContentGraph` — topic co-occurrence graph for visualization.
+- Renders as interactive charts in the dashboard.
+
+### `data/`
+
+**model/** — Room entities
+- `FeedSession` — one per audit run (startTime, endTime, duration, sessionNotes).
+- `ContentItem` — one per OCR'd frame (FK → session, videoIndex, ocrText, scores, embedding, creatorId, timestamp).
+- `SessionMetrics` — computed periodically (FK → session, manipulationScore, driftIndicators, anomalyScore, trends).
+
+**database/PavlovaDatabase.kt**
+- `RoomDatabase` with SQLCipher encryption.
+- Passphrase derived from app package name (for reproducibility).
+- `fallbackToDestructiveMigration` enabled — schema changes wipe local data.
+
+**dao/** — Room Data Access Objects
+- `FeedSessionDao` — CRUD + `getAllSessionsFlow()`, `getByIdFlow(id)`, `getAverageCompletedDurationMs()`.
+- `ContentItemDao` — CRUD + `getBySessionIdFlow(sessionId)`.
+- `SessionMetricsDao` — CRUD + `getLatestFlow()`, `getBySessionIdFlow(sessionId)`.
+
+**ScreenshotStore.kt**
+- Downscaled (≤480px, JPEG quality 70) thumbnails per captured frame.
+- Written to `<filesDir>/captures/<sessionId>/<frameNum>.jpg`.
+- Only writes when `AppSettings.verboseMode` is true.
+- `clearAll()` wipes the directory.
+
+**AppSettings.kt**
+- SharedPreferences-backed singleton.
+- Exposes `verboseMode: Boolean` (toggleable from `SettingsScreen`).
+- Exposes `verboseModeFlow: StateFlow<Boolean>` for Compose reactivity.
+- Exposes `alertsEnabled: Boolean`, `debugCaptureEnabled: Boolean`.
+
+### `debug/`
+
+**DebugCaptureStore.kt**
+- Optional pipeline debugging: saves full-resolution JPEG + OCR text per frame.
+- Written to `<getExternalFilesDir>/debug_captures/<timestamp>/`.
+- Independent from `verboseMode`; toggled via `SettingsScreen`.
+- `FeedAnalyzer.processFrame` calls `save()` unconditionally; store is a no-op when disabled.
+
+### `overlay/`
+
+**OverlayManager.kt**
+- WindowManager overlay that draws auto-dismissing wellbeing alert banners.
+- Uses `TYPE_APPLICATION_OVERLAY` + `FLAG_NOT_TOUCHABLE` (pass-through).
+- Shown for 3–5 seconds over the social-media app.
+- Gated by `AppSettings.alertsEnabled` + `SYSTEM_ALERT_WINDOW` permission.
+- Thread-safe (all operations dispatch to main thread).
+
+**AlertNotifier.kt**
+- Fallback when overlay permission is unavailable.
+- Posts alerts as system notifications on a high-importance "Wellbeing alerts" channel.
+- Stable notification ID per `Alert.key` (only one per key is shown at a time).
+- Severity level maps to priority: `Critical` → `IMPORTANCE_MAX`, `Warning` → `IMPORTANCE_HIGH`.
+
+**FeedAlerts.kt**
+- Evaluates alerts in two families:
+  - **Metric-based**: thresholds from `SessionMetrics` (toxicity > 0.7, isolation > 0.6, drift > 0.8).
+  - **Behavior-based**: screen-time milestones (5, 15, 30, 45, 60 min), session > average duration, repeated creator (>50% of items), binge-volume (>5 items/min).
+- Returns the single most severe due alert (per-key cooldown prevents spam).
+- Alert template: `Alert(key, severity, message, actionUrl)`.
+
+### `permissions/`
+
+**PermissionManager.kt**
+- Helper methods for runtime permission requests.
+- `RECORD_AUDIO` (legacy, not used).
+- `READ_PHONE_STATE` (legacy, not used).
+- `SYSTEM_ALERT_WINDOW` — for overlay alerts.
+- `POST_NOTIFICATIONS` — for notification alerts.
+- `INTERNET` — not used (no network calls).
+
+### `ui/`
+
+**MainActivity.kt**
+- Single-activity Compose root.
+- Navigation graph with 4 routes: `dashboard`, `session/{sessionId}`, `settings`, `debug`.
+- Initializes `PavlovaApplication` singletons on startup.
+
+**DashboardScreen.kt**
+- Shows audit start/stop button (observes `CaptureState`).
+- Displays latest `SessionMetrics` in a card (risk color-coded).
+- Shows session history (time, duration, risk score).
+- First-run onboarding card if no sessions exist.
+- Settings icon (top-right) navigates to `SettingsScreen`.
+- Session cards are tappable → `SessionDetailScreen`.
+
+**SessionDetailScreen.kt**
+- Shows all `ContentItem`s for a session as a scrollable list.
+- Per-item row displays: OCR text, scores (sentiment, toxicity, etc.), creator, optional thumbnail (if verbose mode).
+- Expandable cards show explainability ("why was this session flagged?").
+- Links to `ShapExplainer` summaries.
+
+**SettingsScreen.kt**
+- Toggles: `verboseMode` (enable screenshots), `debugCaptureEnabled`, `alertsEnabled`.
+- Permission request buttons (overlay, notifications, accessibility service).
+- "Clear stored screenshots" action.
+- Navigates to `DebugCapturesScreen` if debug capture is on.
+
+**DebugCapturesScreen.kt**
+- List of debug captures (JPEG + OCR text log).
+- Tappable to view full-resolution frame + extracted text.
+- Developer-only; only visible when debug capture is enabled.
+
+---
+
+## Key Design Patterns
+
+### 1. **Every Model Has a Fallback**
+
+```kotlin
+// Example: NlpModelRunner
+if (nlpModelRunner.isAvailable) {
+    // Use TFLite model
+    scores = nlpModelRunner.classify(text, labels)
+} else {
+    // Use keyword heuristic
+    scores = keywordFallback.classify(text, labels)
+}
+```
+
+This ensures the app is **fully functional without any `.tflite` files**.
+
+### 2. **Singleton Reuse for Expensive Resources**
+
+`ManipulationDetector` reuses `ContentAnalyzer`'s `EmbeddingEngine`:
+
+```kotlin
+// In ManipulationDetector.initialize()
+val embeddingEngine = contentAnalyzer.getEmbeddingEngine()  // Don't load SBERT twice!
+```
+
+### 3. **Privacy by Default, Opt-in Verbosity**
+
+- **Production mode** (default): Only OCR text + scores stored.
+- **Verbose mode** (opt-in): Downscaled (~480px) thumbnails added.
+- **Debug mode** (opt-in): Full-res frames + OCR text for developers.
+
+### 4. **Pluggable Tokenizers**
+
+```kotlin
+val tokenizer = Tokenizer.load(context, "roberta_sentiment", fallbackVocabSize = 50265)
+// → BpeTokenizer if vocab assets exist
+// → WordPieceTokenizer if SBERT vocab exists
+// → HashTokenizer otherwise (deterministic)
+```
+
+### 5. **Room Flow for Reactive UI**
+
+```kotlin
+// DAO returns Flow for Compose reactivity
+val sessions = sessionDao.getAllSessionsFlow()  // Flow<List<FeedSession>>
+LaunchedEffect(sessions) {
+    sessions.collect { newSessions ->
+        // Recompose on data change
+    }
+}
+```
+
+---
+
+## Data Model
+
+### FeedSession
+```kotlin
+@Entity(tableName = "feed_sessions")
+data class FeedSession(
+    @PrimaryKey val id: String = UUID.randomUUID().toString(),
+    val startTime: Long,
+    val endTime: Long? = null,
+    val platform: String,  // "TikTok", "Instagram", etc.
+    val sessionNotes: String? = null
+)
+```
+
+### ContentItem
+```kotlin
+@Entity(
+    tableName = "content_items",
+    foreignKeys = [ForeignKey(entity = FeedSession::class, parentColumns = ["id"], childColumns = ["sessionId"])]
+)
+data class ContentItem(
+    @PrimaryKey val id: String = UUID.randomUUID().toString(),
+    val sessionId: String,
+    val videoIndex: Int,  // Which video in the feed
+    val ocrText: String,
+    val sentiment: Float,
+    val toxicity: Float,
+    val topics: String,  // JSON array: ["politics", "news"]
+    val emotion: Float,
+    val persuasion: Float,
+    val embedding: String,  // JSON array of floats
+    val creatorId: String? = null,
+    val thumbnailPath: String? = null,  // Verbose mode only
+    val timestamp: Long
+)
+```
+
+### SessionMetrics
+```kotlin
+@Entity(
+    tableName = "session_metrics",
+    foreignKeys = [ForeignKey(entity = FeedSession::class, parentColumns = ["id"], childColumns = ["sessionId"])]
+)
+data class SessionMetrics(
+    @PrimaryKey val id: String = UUID.randomUUID().toString(),
+    val sessionId: String,
+    val manipulationScore: Float,  // 0–1
+    val sentimentSpread: Float,
+    val toxicityAverage: Float,
+    val topicDriftEntropy: Float,
+    val embeddingIsolation: Float,
+    val creatorRepetition: Float,
+    val screenTime: Long,  // ms
+    val behavioralEscalation: Float,
+    val anomalyScore: Float,
+    val feedbackLoops: Float,
+    val trends: String,  // JSON serialized
+    val timestamp: Long
+)
+```
+
+---
+
+## Testing
+
+### Current Status
+- **JVM unit tests** for `Tokenizer` implementations (`BpeTokenizer`, `WordPieceTokenizer`, `HashTokenizer`).
+- Staged in `plan.md`; will be added to `app/src/test/java/com/pavlova/ml/TokenizerTest.kt`.
+- **Instrumented tests** (`androidTest`) not yet populated.
+
+### Running Tests
+```bash
+cd android/
+./gradlew test                # JVM tests
+./gradlew connectedAndroidTest # Instrumented tests (requires device)
+```
+
+---
+
+## Performance & Memory
+
+### Frame Capture Rate
+- Target: ~2 FPS (500 ms per frame).
+- Deduplication by content hash reduces redundant analysis.
+
+### TFLite Model Footprint
+- **RoBERTa (quantized)**: ~120–150 MB → loaded once by `NlpModelRunner`.
+- **SBERT MiniLM (quantized)**: ~40–50 MB → loaded once by `EmbeddingEngine`, reused by `ManipulationDetector`.
+- **LSTM**: ~10–20 MB (synthetic Keras placeholder if not pre-trained).
+- **Total**: ~200 MB on disk; models are memory-mapped by TFLite interpreter.
+
+### Disk Usage
+- **Database**: Grows ~500 KB per hour of capture (OCR text + scores, no raw frames by default).
+- **Verbose screenshots**: ~1–2 MB per hour (downscaled JPEGs).
+- **Debug captures**: ~10–20 MB per hour (full-res JPEGs + OCR text).
+
+---
+
+## Security & Privacy
+
+### Encryption
+- Room database is encrypted with SQLCipher using a passphrase derived from package name.
+- Passwords/API keys: None stored (no network calls).
+
+### Data Retention
+- No automatic deletion; user can tap "Clear stored screenshots" in Settings.
+- User can uninstall the app to delete all app-private data.
+
+### Permissions
+- `SYSTEM_ALERT_WINDOW` (optional) for overlay alerts.
+- `POST_NOTIFICATIONS` (optional) for notification alerts.
+- `INTERNET` is declared but not used.
+- `RECORD_AUDIO` & `READ_PHONE_STATE` are legacy; not used.
+
+---
+
+## Future Extensibility
+
+### Adding a New Analysis Component
+1. Create a new class in `analysis/` (e.g., `MyNewAnalyzer.kt`).
+2. Add a method `analyze(items): MyAnalysisResult`.
+3. Call it from `ManipulationDetector.analyze()`.
+4. Add a new indicator weight to the 10-indicator sum.
+5. Update UI to display the new result.
+
+### Adding a New TFLite Model
+1. Place the `.tflite` file in `assets/`.
+2. Create a wrapper class (e.g., `MyModelRunner.kt`) following the `NlpModelRunner` pattern.
+3. Implement `load()`, `close()`, `isAvailable`, and the model-specific method.
+4. Provide a keyword heuristic fallback.
+5. Integrate into `ContentAnalyzer` or a new analysis component.
 |---------|-------|------|
 | `services/` | `ScreenCaptureService`, `CaptureState`, `PavlovaAccessibilityService`, `ScrollSignal` | Capture foreground service + shared run-state flow; optional accessibility scroll detector + its cross-component signal bridge. |
 | `ml/` | `TextExtractor`, `CreatorDetector`, `VideoSegmenter`, `ContentAnalyzer`, `NlpModelRunner`, `EmbeddingEngine`, `Tokenizer`, `FeedAnalyzer`, `ContentAnalysis` | OCR + NLP pipeline, scroll-based video segmentation, and per-video creator resolution/back-fill. |
