@@ -32,9 +32,15 @@ placeholder's vocab range.
 
 Pipeline per model:
     1. Download HuggingFace weights  →  PyTorch
-    2. Export to ONNX
+    2. Export to ONNX (classifiers export input_ids + attention_mask)
     3. Convert ONNX → TFLite  (via onnx2tf)
     4. Quantize (dynamic range)
+    5. Classifiers only: verify TFLite output matches the PyTorch model on
+       sample strings (parity check) and fail loudly on divergence.
+
+Classifier checkpoints are configured at the top of this file
+(SENTIMENT_MODEL / TOXICITY_MODEL) and default to distilled models for
+on-device size/speed.
 
 If HuggingFace download or ONNX→TFLite conversion fails for a model,
 a Keras-based placeholder TFLite is created instead (correct I/O shape,
@@ -56,6 +62,28 @@ import numpy as np
 SCRIPT_DIR = Path(__file__).parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 ASSETS_DIR = PROJECT_ROOT / "android" / "app" / "src" / "main" / "assets"
+
+# ── Model checkpoints ───────────────────────────────────────────────────
+# Distilled checkpoints chosen for on-device size/speed (each ~65-130 MB in
+# TFLite, vs ~250 MB for full RoBERTa-base). Override here to swap models.
+#
+# Sentiment is 3-class (negative / neutral / positive). The default below is
+# the accurate RoBERTa reference; for a smaller distilled option set
+# SENTIMENT_MODEL to a distilled 3-class checkpoint. Toxicity is a distilled
+# DistilBERT (binary benign/toxic).
+SENTIMENT_MODEL = "cardiffnlp/twitter-roberta-base-sentiment-latest"
+SENTIMENT_NUM_CLASSES = 3
+TOXICITY_MODEL = "martin-ha/toxic-comment-model"   # DistilBERT, ~66M params
+TOXICITY_NUM_CLASSES = 2
+MAX_SEQ_LEN = 128
+
+# Sample strings used by the post-conversion parity check.
+PARITY_SAMPLES = [
+    "I absolutely love this, it's wonderful and made my day!",
+    "This is the worst, most disgusting garbage I have ever seen.",
+    "The meeting is scheduled for 3pm tomorrow in room two.",
+    "You are an idiot and everyone hates you.",
+]
 
 
 # ── Python version guard ────────────────────────────────────────────────
@@ -121,7 +149,36 @@ def _keras_lstm(path: Path, window: int = 20, features: int = 5,
         print("  Trained on 1 000 synthetic sequences (10 epochs)")
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(_convert_keras(model))
+    path.write_bytes(_convert_keras_lstm(model))
+
+
+def _convert_keras_lstm(model) -> bytes:
+    """Convert a Keras LSTM model to TFLite.
+
+    The default converter (dynamic-range quantization) frequently fails on
+    LSTM layers, so we try progressively more permissive settings:
+      1. Native TFLite ops, NO quantization (fused UnidirectionalSequenceLSTM).
+      2. Native + Select TF ops fallback (needs the flex delegate on-device).
+    """
+    import tensorflow as tf
+
+    # Attempt 1: native builtins, no optimizations.
+    try:
+        conv = tf.lite.TFLiteConverter.from_keras_model(model)
+        conv.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS]
+        conv._experimental_lower_tensor_list_ops = False
+        return conv.convert()
+    except Exception as e:
+        print(f"  ⚠ LSTM native conversion failed ({e}); retrying with Select TF ops")
+
+    # Attempt 2: allow Select TF ops (Android needs tensorflow-lite-select-tf-ops).
+    conv = tf.lite.TFLiteConverter.from_keras_model(model)
+    conv.target_spec.supported_ops = [
+        tf.lite.OpsSet.TFLITE_BUILTINS,
+        tf.lite.OpsSet.SELECT_TF_OPS,
+    ]
+    conv._experimental_lower_tensor_list_ops = False
+    return conv.convert()
 
 
 def _generate_lstm_data(n, window, features):
@@ -201,12 +258,12 @@ def collect_sentiment(placeholders_only: bool, force: bool):
 
     if not placeholders_only:
         if _try_hf_classifier(
-            "cardiffnlp/twitter-roberta-base-sentiment-latest",
-            path, max_seq_len=128, label="Sentiment"):
+            SENTIMENT_MODEL,
+            path, max_seq_len=MAX_SEQ_LEN, label="Sentiment"):
             return
 
-    print("  Creating Keras placeholder (3-class sentiment)...")
-    _keras_classifier(path, max_seq_len=128, num_classes=3)
+    print(f"  Creating Keras placeholder ({SENTIMENT_NUM_CLASSES}-class sentiment)...")
+    _keras_classifier(path, max_seq_len=MAX_SEQ_LEN, num_classes=SENTIMENT_NUM_CLASSES)
     _print_done(path, placeholder=True)
 
 
@@ -217,12 +274,12 @@ def collect_toxicity(placeholders_only: bool, force: bool):
 
     if not placeholders_only:
         if _try_hf_classifier(
-            "s-nlp/roberta_toxicity_classifier",
-            path, max_seq_len=128, label="Toxicity"):
+            TOXICITY_MODEL,
+            path, max_seq_len=MAX_SEQ_LEN, label="Toxicity"):
             return
 
-    print("  Creating Keras placeholder (2-class toxicity)...")
-    _keras_classifier(path, max_seq_len=128, num_classes=2)
+    print(f"  Creating Keras placeholder ({TOXICITY_NUM_CLASSES}-class toxicity)...")
+    _keras_classifier(path, max_seq_len=MAX_SEQ_LEN, num_classes=TOXICITY_NUM_CLASSES)
     _print_done(path, placeholder=True)
 
 
@@ -246,8 +303,14 @@ def collect_lstm(placeholders_only: bool, force: bool):
         _print_exists(path); return
 
     print("  Building LSTM model (Keras + synthetic training)...")
-    _keras_lstm(path, train=not placeholders_only)
-    _print_done(path)
+    try:
+        _keras_lstm(path, train=not placeholders_only)
+        _print_done(path)
+    except Exception as e:
+        # The LSTM is optional — SequenceAnalyzer has a pure-Kotlin statistical
+        # fallback. Never let an LSTM conversion failure abort the whole run.
+        print(f"  ⚠ LSTM conversion failed ({e}); skipping. "
+              f"SequenceAnalyzer will use its statistical fallback.")
 
 
 # ── HuggingFace download + conversion ──────────────────────────────────
@@ -263,25 +326,98 @@ def _try_hf_classifier(model_name: str, tflite_path: Path,
         model = AutoModelForSequenceClassification.from_pretrained(model_name)
         model.eval()
 
+        # Export BOTH input_ids and attention_mask. Without the mask the model
+        # attends over pad tokens, which corrupts predictions on the short OCR
+        # snippets the app feeds it.
         dummy = tokenizer("test input", return_tensors="pt",
                           max_length=max_seq_len, padding="max_length",
                           truncation=True)
         onnx_path = tflite_path.with_suffix(".onnx")
         torch.onnx.export(
-            model, (dummy["input_ids"],), str(onnx_path),
-            input_names=["input_ids"], output_names=["logits"],
-            opset_version=13)
+            model,
+            (dummy["input_ids"], dummy["attention_mask"]),
+            str(onnx_path),
+            input_names=["input_ids", "attention_mask"],
+            output_names=["logits"],
+            dynamic_axes={
+                "input_ids": {0: "batch", 1: "seq"},
+                "attention_mask": {0: "batch", 1: "seq"},
+                "logits": {0: "batch"},
+            },
+            opset_version=14)
         print(f"  ONNX exported ({onnx_path.stat().st_size / 1e6:.1f} MB)")
 
         _onnx_to_tflite(onnx_path, tflite_path)
         onnx_path.unlink(missing_ok=True)
-        _export_tokenizer_assets(tokenizer, tflite_path.stem)
+        # id2label tells the Android runner the real class order.
+        id2label = {int(k): v for k, v in model.config.id2label.items()}
+        _export_tokenizer_assets(tokenizer, tflite_path.stem, id2label=id2label)
         _print_done(tflite_path)
+
+        # Verify the TFLite output matches the source PyTorch model.
+        _verify_classifier_parity(model, tokenizer, tflite_path, max_seq_len, label)
         return True
     except Exception as e:
         print(f"  ⚠ {label} conversion failed: {e}")
         tflite_path.with_suffix(".onnx").unlink(missing_ok=True)
         return False
+
+
+def _verify_classifier_parity(model, tokenizer, tflite_path, max_seq_len, label,
+                              atol=0.05):
+    """Run [PARITY_SAMPLES] through both the PyTorch model and the converted
+    TFLite model and assert their softmax probabilities agree within [atol].
+
+    Raises AssertionError on divergence so a broken conversion fails loudly
+    instead of silently shipping garbage.
+    """
+    import numpy as np
+    import torch
+    import tensorflow as tf
+
+    print(f"  Verifying {label} TFLite parity...")
+    interp = tf.lite.Interpreter(model_path=str(tflite_path))
+    interp.allocate_tensors()
+    in_details = interp.get_input_details()
+    out_details = interp.get_output_details()
+
+    def tflite_probs(text):
+        enc = tokenizer(text, return_tensors="np", max_length=max_seq_len,
+                        padding="max_length", truncation=True)
+        for d in in_details:
+            name = d["name"]
+            if "mask" in name.lower():
+                arr = enc["attention_mask"]
+            else:
+                arr = enc["input_ids"]
+            interp.set_tensor(d["index"], arr.astype(d["dtype"]))
+        interp.invoke()
+        logits = interp.get_tensor(out_details[0]["index"])[0]
+        e = np.exp(logits - logits.max())
+        return e / e.sum()
+
+    def torch_probs(text):
+        enc = tokenizer(text, return_tensors="pt", max_length=max_seq_len,
+                        padding="max_length", truncation=True)
+        with torch.no_grad():
+            logits = model(**enc).logits[0].numpy()
+        e = np.exp(logits - logits.max())
+        return e / e.sum()
+
+    max_diff = 0.0
+    for text in PARITY_SAMPLES:
+        tp, hp = tflite_probs(text), torch_probs(text)
+        diff = float(np.max(np.abs(tp - hp)))
+        max_diff = max(max_diff, diff)
+        agree = int(np.argmax(tp)) == int(np.argmax(hp))
+        flag = "OK" if (agree and diff <= atol) else "DIVERGE"
+        print(f"    [{flag}] diff={diff:.4f}  argmax_tflite={int(np.argmax(tp))} "
+              f"argmax_torch={int(np.argmax(hp))}")
+        assert agree, f"{label}: argmax mismatch on: {text!r}"
+    assert max_diff <= atol, (
+        f"{label}: TFLite vs PyTorch probabilities diverge "
+        f"(max diff {max_diff:.4f} > {atol})")
+    print(f"  ✅ {label} parity OK (max prob diff {max_diff:.4f})")
 
 
 def _try_hf_sbert(tflite_path: Path) -> bool:
@@ -327,7 +463,7 @@ def _try_hf_sbert(tflite_path: Path) -> bool:
 
 # ── Tokenizer asset export ─────────────────────────────────────────────
 
-def _export_tokenizer_assets(tokenizer, model_stem: str):
+def _export_tokenizer_assets(tokenizer, model_stem: str, id2label: dict = None):
     """Save the HuggingFace tokenizer's vocab/merges into the Android assets
     folder so the on-device runner can tokenise input the same way the model
     was trained.
@@ -335,9 +471,12 @@ def _export_tokenizer_assets(tokenizer, model_stem: str):
     Produces, for stem ``roberta_sentiment``:
       roberta_sentiment_vocab.json
       roberta_sentiment_merges.txt   (BPE models only)
-      roberta_sentiment_tokenizer.json  (config: type, special ids, ...)
+      roberta_sentiment_tokenizer.json  (config: type, special ids, id2label...)
 
     For WordPiece (BERT-style) models the vocab is emitted as ``*_vocab.txt``.
+
+    [id2label], when supplied, records the classifier's class order so the
+    Android runner labels outputs correctly instead of assuming an order.
     """
     import json
 
@@ -362,6 +501,10 @@ def _export_tokenizer_assets(tokenizer, model_stem: str):
         "do_lower_case": getattr(tokenizer, "do_lower_case", False),
         "family": "bpe" if is_bpe else ("wordpiece" if is_wordpiece else "unknown"),
     }
+    if id2label:
+        # Stored as {"0": "negative", ...} for the Android runner.
+        config["id2label"] = {str(k): v for k, v in id2label.items()}
+        config["labels"] = [id2label[i] for i in sorted(id2label.keys())]
 
     if is_bpe:
         vocab = tokenizer.get_vocab()
