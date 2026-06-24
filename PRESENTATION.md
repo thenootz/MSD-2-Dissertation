@@ -16,19 +16,23 @@
 
 ## Slide 2: Architecture & Model Stack
 
-### 7-Layer Analysis Pipeline (all on-device)
+### On-Device Analysis Pipeline (no network calls)
 
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
-| **OCR** | Google ML Kit | Extract text from feed screenshots |
-| **NLP Classification** | RoBERTa (TFLite, BPE) | Sentiment, toxicity, emotion, persuasion |
-| **Semantic Clustering** | SBERT MiniLM (TFLite, WordPiece) | Detect echo chambers via embedding similarity |
+| **Screen capture** | MediaProjection (~2 FPS) | Capture feed frames, dedupe by content hash |
+| **OCR** | Google ML Kit | Extract text + line boxes from feed frames |
+| **NLP Classification** | RoBERTa (TFLite, BPE) | Sentiment & toxicity (keyword fallback) |
+| **Keyword heuristics** | Pure Kotlin | Topic, emotion, persuasion scoring |
+| **Semantic Clustering** | SBERT MiniLM (TFLite, WordPiece) | Echo-chamber detection via embedding similarity |
+| **Video segmentation** | Frame-diff + accessibility scroll | Group frames per short video, track creators |
 | **Sequence Analysis** | LSTM (TFLite) | Detect escalating content patterns over time |
-| **Feed Drift** | Markov Chains | Track topic transition probabilities & funnels |
-| **Anomaly Detection** | Isolation Forest | Flag abnormal recommendation sessions |
-| **Explainability** | SHAP + UMAP | Explain *why* a session was flagged |
+| **Feed Drift** | Markov Chains (pure Kotlin) | Topic transition probabilities & funnels |
+| **Anomaly Detection** | Isolation Forest (pure Kotlin) | Flag abnormal recommendation sessions |
+| **Explainability** | SHAP permutation importance | Explain *why* a session was flagged |
+| **Visualization** | UMAP + topic co-occurrence graph | 2D embedding map + topic graph |
 
-**Key design**: Every neural model has a keyword-heuristic fallback — the app works without any `.tflite` files.
+**Key design**: Every neural model has a pure-Kotlin fallback — the app works without any `.tflite` files.
 
 ---
 
@@ -36,21 +40,26 @@
 
 ### Completed ✅
 
-- **Feed capture engine** — MediaProjection screen capture at 2 FPS
-- **OCR pipeline** — ML Kit text extraction from feed frames
-- **NLP analysis** — Topic classification, sentiment, toxicity, emotion, persuasion scoring
-- **SBERT embeddings** — Semantic similarity & diversity measurement
+- **Feed capture engine** — MediaProjection screen capture at ~2 FPS with content-hash dedup
+- **OCR pipeline** — ML Kit text extraction with positional line boxes
+- **NLP analysis** — Sentiment, toxicity, topic, emotion, persuasion scoring (neural + heuristics)
+- **SBERT embeddings** — Semantic similarity, k-means clustering & diversity measurement
+- **Video segmentation** — Scroll-based boundary detection (visual + accessibility signal fusion)
+- **Creator detection** — Per-video creator resolution with cross-frame stability + back-fill
 - **Markov chain analyzer** — Topic transitions, radicalization funnel detection
-- **LSTM sequence analyzer** — Temporal escalation pattern detection
+- **LSTM sequence analyzer** — Temporal escalation pattern detection (statistical fallback)
 - **Isolation Forest** — Anomaly scoring across sessions
+- **Manipulation detector** — 10-indicator weighted risk score (0–1)
+- **Session trend analyzer** — Cross-session behavior/addiction trend detection
 - **SHAP explainer** — Per-session feature importance with human-readable summaries
 - **UMAP visualization** — 2D projection of content embeddings + topic graph
-- **Manipulation detector** — 10-indicator weighted risk score (0–1)
-- **Encrypted Room database** — FeedSession, ContentItem, SessionMetrics entities
-- **Dashboard UI** — Compose-based with metrics cards, session history, risk scores
+- **Wellbeing alerts** — Real-time overlay banners with system-notification fallback
+- **Encrypted Room database** — FeedSession, ContentItem, SessionMetrics (SQLCipher)
+- **Compose UI** — Dashboard, session detail, settings, debug screens (4 nav routes)
+- **Privacy controls** — Opt-in verbose/demo mode + developer debug-capture toggle
 - **Model collection script** — Python 3.11 script to download & convert HuggingFace → TFLite
 
-### 28 Kotlin source files | 4 TFLite model slots | 3 Room entities | 0 cloud dependencies
+### Kotlin-only Android app | 4 TFLite model slots (all optional) | 3 Room entities | 0 cloud dependencies
 
 ---
 
@@ -80,7 +89,32 @@ Session capture → Per-item NLP scores → Session-level metrics:
 
 ---
 
-## Slide 5: Next Steps
+## Slide 5: Real-Time Wellbeing Alerts
+
+### Two Families of Alert, Delivered On-Screen
+
+While an audit runs, `FeedAlerts` evaluates each fresh `SessionMetrics` plus a
+runtime session context (elapsed time, video/item counts, average past-session
+duration, top creator + share) and surfaces a heads-up banner over the feed.
+
+**Metric-based** (from analysis):
+- **Toxicity** — elevated average toxicity ("heavy content")
+- **Feed shaping** — high manipulation score ("your feed is being shaped")
+- **Isolation / echo chamber** — creator/topic concentration ("your feed is narrowing")
+
+**Behaviour / time-based** (from session context):
+- **Screen-time milestones** — 5 / 15 / 30 / 45 / 60 min (INFO → WARNING → CRITICAL)
+- **Longer than average** — session exceeds 1.25× the user's usual duration
+- **Repeated creator** — one creator dominates ≥40% of recent videos
+- **Binge volume** — ≥40 videos watched in one session
+
+**Delivery**: Overlay banner (`SYSTEM_ALERT_WINDOW`) preferred; falls back to a
+high-importance **system notification** when the permission is missing. A
+per-alert cooldown shows only the single most severe due alert.
+
+---
+
+## Slide 6: Next Steps
 
 ### Immediate Priorities
 
