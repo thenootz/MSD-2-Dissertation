@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Pavlova — an Android app (Kotlin + Jetpack Compose) that audits social media feed recommendation algorithms (TikTok, Instagram, YouTube) for behavioral/ideological manipulation. It captures the screen via MediaProjection, OCRs feed text on-device, runs an NLP pipeline, and computes drift/manipulation metrics — entirely on-device, no network calls. This is a Master's dissertation project; this `android/` directory is the Gradle root for the app module. Sibling directories at the repo root (`../scripts`, `../rust`, `../ARCHITECTURE.md`, `../PRESENTATION.md`) contain the model-collection tooling and design docs — read `../ARCHITECTURE.md` for the original phased design rationale if working on analysis/ML code.
+Pavlova — an Android app (Kotlin + Jetpack Compose) that audits social media feed recommendation algorithms (TikTok, Instagram, YouTube) for behavioral/ideological manipulation. It captures the screen via MediaProjection, OCRs feed text on-device, runs an NLP pipeline, and computes drift/manipulation metrics — entirely on-device, no network calls. This is a Master's dissertation project; this `android/` directory is the Gradle root for the app module. Sibling directories at the repo root (`../scripts`, `../ARCHITECTURE.md`, `../PRESENTATION.md`) contain the model-collection tooling and design docs — read `../ARCHITECTURE.md` for the original phased design rationale if working on analysis/ML code.
 
 ## Build & Run
 
@@ -84,7 +84,7 @@ ScreenCaptureService (MediaProjection, ~2 FPS, frame dedup by content hash)
 - **`ui/SettingsScreen.kt`** — Compose screen with two toggles (verbose/demo mode, debug capture) plus a "Clear stored screenshots" button. Reachable from the dashboard's top-right `Settings` action; navigates to `DebugCapturesScreen` when debug capture is on.
 - **`overlay/OverlayManager.kt`** — `WindowManager` overlay that draws auto-dismissing **wellbeing alert banners** (`TYPE_APPLICATION_OVERLAY`, `FLAG_NOT_TOUCHABLE`) over the social-media app. Driven by `FeedAnalyzer` via `analysis/FeedAlerts.kt`, which evaluates per-session toxicity / feed-influence / isolation thresholds. Gated by `AppSettings.alertsEnabled` + the `SYSTEM_ALERT_WINDOW` permission (granted from `SettingsScreen`).
 - **`permissions/PermissionManager.kt`** — overlay / POST_NOTIFICATIONS / MediaProjection permission helpers. MediaProjection is no longer gated on overlay; overlay is requested separately from Settings for the alerts feature.
-- **`MainActivity.kt`** — single-activity Compose app with four nav routes: `dashboard`, `session/{sessionId}`, `settings`, `debug`. `DashboardScreen` shows audit start/stop, permission + verbose-mode status, latest `SessionMetrics`, and session history, all driven by Room `Flow`s.
+- **`MainActivity.kt`** — single-activity Compose app with four nav routes: `dashboard`, `session/{sessionId}`, `settings`, `debug`. `DashboardScreen` shows audit start/stop (with a live "● Auditing in progress" indicator while capture is running), a gear `IconButton` to Settings, permission + verbose-mode status, latest `SessionMetrics`, and session history, all driven by Room `Flow`s. When there are no sessions yet it renders a first-run "Get started" onboarding card; each `SessionCard` shows the session start time and is tinted with the same manipulation-score thresholds as `MetricsCard` (errorContainer > 0.7, tertiaryContainer > 0.4).
 
 ### Key conventions
 

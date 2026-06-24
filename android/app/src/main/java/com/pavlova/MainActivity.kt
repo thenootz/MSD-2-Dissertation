@@ -13,6 +13,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -39,6 +41,11 @@ import com.pavlova.ui.components.MetricChip
 import com.pavlova.ui.theme.PavlovaTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+private val SESSION_FMT = SimpleDateFormat("MMM d, HH:mm", Locale.US)
 
 class MainActivity : ComponentActivity() {
 
@@ -214,7 +221,9 @@ fun DashboardScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                TextButton(onClick = onOpenSettings) { Text("Settings") }
+                IconButton(onClick = onOpenSettings) {
+                    Icon(Icons.Default.Settings, contentDescription = "Settings")
+                }
             }
             Spacer(modifier = Modifier.height(8.dp))
         }
@@ -234,6 +243,17 @@ fun DashboardScreen(
                 Text(
                     text = if (isAuditing) "Stop Auditing" else "Start Feed Audit",
                     style = MaterialTheme.typography.titleMedium
+                )
+            }
+        }
+
+        // Live capture indicator
+        if (isAuditing) {
+            item {
+                Text(
+                    "● Auditing in progress — switch to your feed app and scroll",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
                 )
             }
         }
@@ -262,6 +282,30 @@ fun DashboardScreen(
                                 "\"display over other apps\" in Settings.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            }
+        }
+
+        // First-run onboarding (only when there's no data yet)
+        if (sessions.isEmpty() && recentMetrics.isEmpty()) {
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            "Get started",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            "1. Press Start Feed Audit and allow screen capture.\n" +
+                                "2. Open TikTok, Instagram, or YouTube and scroll as usual.\n" +
+                                "3. Return here to see how your feed is shaping you — " +
+                                "all analysis runs on-device, nothing leaves your phone.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -436,10 +480,17 @@ fun SessionTrendCard(report: SessionTrendAnalyzer.Report) {
 
 @Composable
 fun SessionCard(session: FeedSession, metrics: SessionMetrics?, onClick: () -> Unit) {
+    val containerColor = when {
+        metrics == null -> MaterialTheme.colorScheme.surface
+        metrics.manipulationScore > 0.7f -> MaterialTheme.colorScheme.errorContainer
+        metrics.manipulationScore > 0.4f -> MaterialTheme.colorScheme.tertiaryContainer
+        else -> MaterialTheme.colorScheme.surface
+    }
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = containerColor)
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
             Row(
@@ -448,10 +499,17 @@ fun SessionCard(session: FeedSession, metrics: SessionMetrics?, onClick: () -> U
             ) {
                 Text(session.platform.uppercase(), style = MaterialTheme.typography.labelMedium)
                 Text(
-                    "${session.totalItems} items",
-                    style = MaterialTheme.typography.labelMedium
+                    SESSION_FMT.format(Date(session.startTime)),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                "${session.totalItems} items",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             if (metrics != null) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
