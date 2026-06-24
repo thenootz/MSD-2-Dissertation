@@ -14,6 +14,7 @@ import com.pavlova.data.database.PavlovaDatabase
 import com.pavlova.data.model.ContentItem
 import com.pavlova.data.model.FeedSession
 import com.pavlova.debug.DebugCaptureStore
+import com.pavlova.overlay.AlertNotifier
 import com.pavlova.overlay.OverlayManager
 import com.pavlova.services.ScrollSignal
 import kotlinx.coroutines.*
@@ -39,6 +40,7 @@ class FeedAnalyzer(context: Context) {
     private val metricsDao: SessionMetricsDao = db.sessionMetricsDao()
 
     private val overlay = OverlayManager(context)
+    private val notifier = AlertNotifier(context)
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -227,32 +229,74 @@ class FeedAnalyzer(context: Context) {
             Log.d(TAG, "Metrics for $sessionId: manipulation=${metrics.manipulationScore}, " +
                     "topicEntropy=${metrics.topicEntropy}, escalation=${metrics.emotionalEscalation}")
 
-            maybeShowAlerts(metrics)
+            maybeShowAlerts(metrics, items)
         } catch (e: Exception) {
             Log.e(TAG, "Error computing metrics", e)
         }
     }
 
     /**
-     * Evaluate wellbeing thresholds and surface an on-screen alert banner when
-     * crossed. Respects the user's [AppSettings.alertsEnabled] toggle, the
-     * draw-over-other-apps permission, and a per-type cooldown.
+     * Evaluate wellbeing thresholds and surface an alert when crossed. Respects
+     * the user's [AppSettings.alertsEnabled] toggle and a per-type cooldown.
+     * Builds a [FeedAlerts.SessionContext] so time/behaviour-based alerts (screen
+     * time, session length, creator repetition, binge volume) can fire alongside
+     * the metric-based ones.
+     *
+     * Delivery: the on-screen [OverlayManager] banner is preferred, but when the
+     * draw-over-other-apps permission is missing we fall back to a system
+     * notification via [AlertNotifier] so alerts still reach the user.
      */
-    private fun maybeShowAlerts(metrics: com.pavlova.data.model.SessionMetrics) {
+    private suspend fun maybeShowAlerts(
+        metrics: com.pavlova.data.model.SessionMetrics,
+        items: List<ContentItem>
+    ) {
         if (!AppSettings.alertsEnabled) return
-        if (!overlay.canDrawOverlays()) return
+
+        val canOverlay = overlay.canDrawOverlays()
+        val canNotify = notifier.canNotify()
+        // No delivery channel available — nothing to do.
+        if (!canOverlay && !canNotify) return
+
+        val session = currentSession
+        val context = if (session != null) {
+            val creatorCounts = items
+                .mapNotNull { it.creatorId?.trim()?.takeIf(String::isNotBlank) }
+                .groupingBy { it }.eachCount()
+            val top = creatorCounts.maxByOrNull { it.value }
+            val topShare =
+                if (items.isNotEmpty() && top != null) top.value.toFloat() / items.size else 0f
+            val avgDuration = runCatching {
+                sessionDao.getAverageCompletedDurationMs(session.id)
+            }.getOrNull()?.toLong()
+
+            FeedAlerts.SessionContext(
+                elapsedMs = System.currentTimeMillis() - session.startTime,
+                itemCount = items.size,
+                videoCount = currentVideoIndex + 1,
+                avgSessionDurationMs = avgDuration,
+                topCreator = top?.key,
+                topCreatorShare = topShare
+            )
+        } else null
 
         val now = System.currentTimeMillis()
-        val due = FeedAlerts.evaluate(metrics).filter { alert ->
+        val due = FeedAlerts.evaluate(metrics, context).filter { alert ->
             now - (lastAlertAt[alert.key] ?: 0L) > ALERT_COOLDOWN_MS
         }
         if (due.isEmpty()) return
 
-        // Show the single most severe due alert (avoid stacking banners).
+        // Show the single most severe due alert (avoid stacking).
         val top = due.maxByOrNull { it.level.ordinal } ?: return
         due.forEach { lastAlertAt[it.key] = now }
-        overlay.showAlert(top.title, top.body, top.level)
-        Log.d(TAG, "Alert shown: ${top.key} (${top.level})")
+
+        if (canOverlay) {
+            overlay.showAlert(top.title, top.body, top.level)
+            Log.d(TAG, "Alert shown (overlay): ${top.key} (${top.level})")
+        } else {
+            // Overlay permission missing — fall back to a system notification.
+            notifier.notify(top.key, top.title, top.body, top.level)
+            Log.d(TAG, "Alert shown (notification): ${top.key} (${top.level})")
+        }
     }
 
     fun destroy() {

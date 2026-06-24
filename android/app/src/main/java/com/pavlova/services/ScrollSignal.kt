@@ -1,5 +1,9 @@
 package com.pavlova.services
 
+import android.content.ComponentName
+import android.content.Context
+import android.provider.Settings
+import android.text.TextUtils
 import android.os.SystemClock
 
 /**
@@ -34,4 +38,27 @@ object ScrollSignal {
 
     /** Whether scroll detection is actually usable right now. */
     fun isActive(): Boolean = accessibilityConnected
+
+    /**
+     * Whether the user has enabled [PavlovaAccessibilityService] in system
+     * Accessibility settings. This is the authoritative source of truth for the
+     * Settings UI: unlike [isActive], it does not depend on the service instance
+     * already being (re)connected in the current process, so it stays correct
+     * across the process restart that often happens when the user returns from
+     * the system Accessibility screen.
+     */
+    fun isEnabledInSettings(context: Context): Boolean {
+        val expected = ComponentName(context, PavlovaAccessibilityService::class.java)
+        val enabledServices = Settings.Secure.getString(
+            context.contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ) ?: return false
+        val splitter = TextUtils.SimpleStringSplitter(':')
+        splitter.setString(enabledServices)
+        for (component in splitter) {
+            val parsed = ComponentName.unflattenFromString(component)
+            if (parsed != null && parsed == expected) return true
+        }
+        return false
+    }
 }

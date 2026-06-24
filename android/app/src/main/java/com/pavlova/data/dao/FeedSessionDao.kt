@@ -30,4 +30,15 @@ interface FeedSessionDao {
 
     @Query("SELECT COUNT(*) FROM feed_sessions")
     suspend fun getSessionCount(): Int
+
+    /**
+     * Average duration (ms) of completed sessions, excluding [excludeId]
+     * (typically the currently-active session). Null when there are no other
+     * completed sessions to compare against.
+     */
+    @Query(
+        "SELECT AVG(endTime - startTime) FROM feed_sessions " +
+            "WHERE endTime IS NOT NULL AND id != :excludeId"
+    )
+    suspend fun getAverageCompletedDurationMs(excludeId: String): Double?
 }

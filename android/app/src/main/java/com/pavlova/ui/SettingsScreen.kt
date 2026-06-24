@@ -44,7 +44,12 @@ fun SettingsScreen(
 
     // Re-read overlay permission when returning from the system settings screen.
     var canDrawOverlays by remember { mutableStateOf(hasOverlayPermission(context)) }
-    var scrollDetectorOn by remember { mutableStateOf(ScrollSignal.isActive()) }
+    // Drive the status from the system "enabled" setting (authoritative) rather
+    // than the runtime connection flag, which lags behind / resets on the
+    // process restart that happens when returning from the Accessibility screen.
+    var scrollDetectorOn by remember {
+        mutableStateOf(ScrollSignal.isEnabledInSettings(context) || ScrollSignal.isActive())
+    }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -54,7 +59,8 @@ fun SettingsScreen(
                     scope.launch { snackbarHost.showSnackbar("Overlay permission granted — alerts are active") }
                 }
                 canDrawOverlays = granted
-                scrollDetectorOn = ScrollSignal.isActive()
+                scrollDetectorOn =
+                    ScrollSignal.isEnabledInSettings(context) || ScrollSignal.isActive()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)

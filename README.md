@@ -43,6 +43,12 @@ Screen Capture (MediaProjection, 2 FPS)
         │
         ▼
   Encrypted Room DB  →  Dashboard UI
+        │
+        ▼
+  On-screen wellbeing alerts (overlay banner, or notification fallback)
+  ├── Metric-based: toxicity / feed-shaping / echo-chamber
+  └── Behaviour-based: screen-time milestones, longer-than-average
+                       session, repeated creator, binge volume
 ```
 
 ### Model Stack
@@ -143,7 +149,9 @@ pavlova/
 │   │   └── TextExtractor.kt       #   ML Kit OCR
 │   ├── services/                  # Android services
 │   │   └── ScreenCaptureService.kt#   MediaProjection capture
-│   ├── overlay/OverlayManager.kt  # Screen overlay
+│   ├── overlay/                   # Wellbeing alert delivery
+│   │   ├── OverlayManager.kt      #   On-screen banner over other apps
+│   │   └── AlertNotifier.kt       #   System-notification fallback
 │   ├── permissions/               # Permission handling
 │   ├── ui/theme/                  # Compose theme
 │   ├── MainActivity.kt           # Dashboard UI

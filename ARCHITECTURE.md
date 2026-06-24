@@ -105,7 +105,7 @@ by `ContentAnalyzer` so the model file isn't memory-mapped twice.
 | `data/` | `database/PavlovaDatabase`, `dao/*`, `model/*`, `ScreenshotStore`, `AppSettings` | Encrypted Room + on-disk artefacts + prefs. |
 | `debug/` | `DebugCaptureStore` | Developer-only frame + OCR text log. |
 | `ui/` | `SessionDetailScreen`, `SettingsScreen`, `DebugCapturesScreen`, `components/Common.kt`, `theme/*` | Compose UI. |
-| `overlay/` | `OverlayManager` | Draws auto-dismissing wellbeing alert banners over other apps (`SYSTEM_ALERT_WINDOW`). Driven by `FeedAnalyzer` + `FeedAlerts`. |
+| `overlay/` | `OverlayManager`, `AlertNotifier` | `OverlayManager` draws auto-dismissing wellbeing alert banners over other apps (`SYSTEM_ALERT_WINDOW`); `AlertNotifier` is the system-notification fallback used when overlay permission is missing. Driven by `FeedAnalyzer` + `FeedAlerts`. |
 | `permissions/` | `PermissionManager` | Permission helpers. The active flow only requests `POST_NOTIFICATIONS` and MediaProjection — `SYSTEM_ALERT_WINDOW` is no longer gated. |
 | (root) | `MainActivity`, `PavlovaApplication` | NavHost (4 routes) + app-level init. |
 
@@ -261,11 +261,16 @@ header per video with the resolved creator and frame count.
 ## On-screen wellbeing alerts
 
 While an audit session runs, `FeedAnalyzer` evaluates each freshly computed
-`SessionMetrics` against soft wellbeing thresholds via `FeedAlerts.evaluate`
-and surfaces a heads-up banner over the social-media app through
-`overlay/OverlayManager`.
+`SessionMetrics` — plus a runtime `FeedAlerts.SessionContext` (elapsed time,
+video/item counts, average past-session duration, and the session's top
+creator + its share) — against soft wellbeing thresholds via
+`FeedAlerts.evaluate(metrics, context)` and surfaces a heads-up banner over
+the social-media app through `overlay/OverlayManager`.
 
-Three alert types (each with WARNING/CRITICAL tiers):
+Two families of alert are produced (each with WARNING/CRITICAL tiers unless
+noted):
+
+**Metric-based** (from `SessionMetrics`):
 
 - **Toxicity** — `avgToxicity` above threshold ("heavy content").
 - **Feed shaping** — `manipulationScore` above threshold ("your feed is being
@@ -273,18 +278,37 @@ Three alert types (each with WARNING/CRITICAL tiers):
 - **Isolation / echo chamber** — `max(creatorConcentration, topTopicShare)`
   above threshold ("your feed is narrowing").
 
+**Behaviour / time-based** (from `SessionContext`):
+
+- **Screen-time milestones** — keyed per band (`screen_time_5/15/30/45/60`),
+  escalating INFO → WARNING → CRITICAL as elapsed time crosses 5/15/30/45/60
+  minutes ("Screen time: N minutes").
+- **Longer than average** — elapsed time exceeds 1.25× the user's average past
+  completed session (needs ≥1 prior session; "longer than your usual").
+- **Repeated creator** — the most-seen creator makes up ≥40% (CRITICAL ≥60%)
+  of recent videos, naming the handle ("seeing a lot of @creator").
+- **Binge volume** — ≥40 (WARNING ≥80) videos watched in one session.
+
 `OverlayManager` draws a `FLAG_NOT_TOUCHABLE` `TYPE_APPLICATION_OVERLAY`
 banner that auto-dismisses after a few seconds, so it never intercepts touch
-input. The feature is gated by:
+input. The feature is gated by the `AppSettings.alertsEnabled` toggle
+(default on).
 
-- the `AppSettings.alertsEnabled` toggle (default on), and
-- the `SYSTEM_ALERT_WINDOW` (draw-over-other-apps) permission, which the user
-  grants from `SettingsScreen` (the screen detects the missing permission and
-  shows a "Grant permission" prompt).
+**Delivery & fallback.** The on-screen overlay banner is preferred, but it
+needs the `SYSTEM_ALERT_WINDOW` (draw-over-other-apps) permission, which the
+user grants from `SettingsScreen` (the screen detects the missing permission
+and shows a "Grant permission" prompt). When that permission is **missing**,
+`FeedAnalyzer` falls back to a **system notification** via
+`overlay/AlertNotifier` so alerts still reach the user. The notification uses a
+dedicated high-importance "Wellbeing alerts" channel (separate from the
+low-importance foreground-capture notification), maps the alert `Level` to a
+notification priority, and reuses a stable id per `Alert.key` so repeats update
+in place. If neither the overlay nor notifications are available, the alert is
+skipped.
 
-A per-alert-type cooldown in `FeedAnalyzer` prevents the same banner from
-repeating too frequently; only the single most severe due alert is shown at a
-time.
+A per-alert-type cooldown in `FeedAnalyzer` (keyed by `Alert.key`) prevents the
+same alert from repeating too frequently; only the single most severe due alert
+is shown at a time, through whichever delivery channel is available.
 
 ---
 
